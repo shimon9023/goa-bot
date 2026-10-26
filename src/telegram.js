@@ -67,12 +67,18 @@ export function fileUrl(filePath) {
   return `https://api.telegram.org/file/bot${config.telegram.token}/${filePath}`;
 }
 
-export function setWebhook(url) {
+export function getWebhookInfo() {
+  return call('getWebhookInfo', {});
+}
+
+export function setWebhook(url, { dropPending = false } = {}) {
   return call('setWebhook', {
     url,
     secret_token: config.telegram.webhookSecret,
     allowed_updates: ['message', 'callback_query'],
-    drop_pending_updates: true,
+    // בתוכנית החינמית השרת נרדם, וההודעה שמעירה אותו ממתינה בתור.
+    // מחיקת התור בעלייה הייתה מוחקת בדיוק אותה, אז כברירת מחדל לא מוחקים.
+    drop_pending_updates: dropPending,
   });
 }
 

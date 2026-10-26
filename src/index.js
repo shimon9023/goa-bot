@@ -24,6 +24,8 @@ import {
   webAppButton,
   getFile,
   fileUrl,
+  setWebhook,
+  getWebhookInfo,
 } from './telegram.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -564,8 +566,56 @@ app.post('/cron/run-checks', async (req, res) => {
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
-app.listen(config.port, () => {
+// --- בדיקת חיבור הבוט לטלגרם ---
+// מאפשר לראות את מצב החיבור ולחדש אותו בלי טרמינל.
+
+app.get('/admin/webhook-status', async (req, res) => {
+  if (!config.cronSecret || (req.get('X-Cron-Secret') || req.query.secret) !== config.cronSecret) {
+    return res.sendStatus(401);
+  }
+
+  try {
+    res.json(await getWebhookInfo());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/admin/set-webhook', async (req, res) => {
+  if (!config.cronSecret || (req.get('X-Cron-Secret') || req.query.secret) !== config.cronSecret) {
+    return res.sendStatus(401);
+  }
+
+  try {
+    res.json(await connectWebhook());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// מחבר את הבוט לשרת. בטוח לקרוא לזה שוב ושוב.
+async function connectWebhook() {
+  if (!config.publicBaseUrl) {
+    throw new Error('חסר PUBLIC_BASE_URL, אי אפשר לחבר את הבוט.');
+  }
+
+  const url = `${config.publicBaseUrl}/telegram/webhook`;
+  await setWebhook(url);
+
+  return { ok: true, url };
+}
+
+app.listen(config.port, async () => {
   console.log(`הבוט מאזין על פורט ${config.port}`);
+
+  // מחברים את הבוט בכל עלייה. טלגרם מתעלם אם זה כבר מחובר לאותה כתובת,
+  // וככה אין צורך להריץ פקודה ידנית אחרי כל פריסה.
+  try {
+    const result = await connectWebhook();
+    console.log(`הבוט מחובר לטלגרם: ${result.url}`);
+  } catch (error) {
+    console.error('חיבור הבוט לטלגרם נכשל:', error.message);
+  }
 
   // בתוכנית החינמית השרת נרדם, אז המתזמן הפנימי לא אמין
   // ומייק הוא זה שמעיר ומריץ. בתוכנית בתשלום המתזמן עובד כרגיל.
