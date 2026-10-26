@@ -5,28 +5,44 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>עריכת מוצר</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;900&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #0d0d0f;
-    --surface: #17171b;
-    --surface-2: #1f1f25;
-    --line: #2a2a32;
-    --text: #f2f2f4;
-    --muted: #9a9aa5;
-    --accent: #c9a227;
-    --ok: #3ba55d;
-    --radius: 14px;
+    --bg: #f4f4f6;
+    --surface: #ffffff;
+    --surface-2: #ececf0;
+    --line: rgba(12, 9, 13, .09);
+    --line-strong: rgba(12, 9, 13, .16);
+    --text: #0c090d;
+    --text-2: #5c5c63;
+    --text-3: #8b8b93;
+    --accent: #0142ff;
+    --accent-soft: rgba(1, 66, 255, .09);
+    --warn: #9a6700;
+    --warn-soft: rgba(250, 188, 60, .2);
+    --danger: #c92a2a;
+    --r-card: 16px;
+    --r-ctl: 12px;
     --ease: cubic-bezier(.32, .72, 0, 1);
   }
 
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme="dark"]) {
-      --bg: #f6f6f7;
-      --surface: #ffffff;
-      --surface-2: #f0f0f2;
-      --line: #e2e2e6;
-      --text: #15151a;
-      --muted: #6c6c78;
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e0e11;
+      --surface: #1a1a1f;
+      --surface-2: #24242b;
+      --line: rgba(255, 255, 255, .09);
+      --line-strong: rgba(255, 255, 255, .18);
+      --text: #f3f3f5;
+      --text-2: #a8a8b2;
+      --text-3: #78788a;
+      --accent: #5b8bff;
+      --accent-soft: rgba(91, 139, 255, .14);
+      --warn: #fabc3c;
+      --warn-soft: rgba(250, 188, 60, .14);
+      --danger: #ff6b6b;
     }
   }
 
@@ -34,146 +50,188 @@
 
   body {
     margin: 0;
-    padding: 20px 16px calc(104px + env(safe-area-inset-bottom));
+    padding: 18px 16px calc(96px + env(safe-area-inset-bottom));
     background: var(--bg);
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-family: Heebo, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-size: 16px;
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
+    overscroll-behavior-y: contain;
   }
 
-  .field { margin-bottom: 18px; }
+  .field { margin-bottom: 20px; }
 
   label {
     display: block;
     font-size: 12px;
-    letter-spacing: .07em;
-    text-transform: uppercase;
-    color: var(--muted);
+    font-weight: 700;
+    letter-spacing: .05em;
+    color: var(--text-3);
     margin-bottom: 7px;
-    font-weight: 600;
   }
 
   input[type="text"], textarea {
     width: 100%;
     padding: 13px 14px;
     background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
+    border: none;
+    box-shadow: 0 0 0 1px var(--line);
+    border-radius: var(--r-ctl);
     color: var(--text);
     font-family: inherit;
     font-size: 16px;
     line-height: 1.55;
     resize: vertical;
-    transition: border-color .22s var(--ease);
+    transition: box-shadow .3s var(--ease);
   }
 
   input[type="text"]:focus, textarea:focus {
     outline: none;
-    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent);
   }
 
-  textarea.short { min-height: 80px; }
-  textarea.long { min-height: 190px; }
+  textarea.one { min-height: 62px; }
+  textarea.short { min-height: 84px; }
+  textarea.long { min-height: 200px; }
 
-  .count { font-size: 12px; color: var(--muted); margin-top: 5px; text-align: left; }
-  .count.over { color: #e2574c; }
+  .count {
+    font-size: 12px;
+    color: var(--text-3);
+    margin-top: 5px;
+    text-align: left;
+    font-variant-numeric: tabular-nums;
+  }
+  .count.over { color: var(--danger); font-weight: 500; }
+  .count.good { color: var(--accent); }
+
+  .hint { font-size: 13px; color: var(--text-3); margin-top: 5px; }
 
   .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 
   .chip {
     padding: 8px 14px;
     background: var(--surface);
-    border: 1px solid var(--line);
+    box-shadow: 0 0 0 1px var(--line);
     border-radius: 999px;
     font-size: 14px;
+    font-weight: 500;
     cursor: pointer;
-    transition: background .2s var(--ease), border-color .2s var(--ease), color .2s var(--ease);
+    transition: background .28s var(--ease), color .28s var(--ease),
+                box-shadow .28s var(--ease), transform .28s var(--ease);
+    touch-action: manipulation;
   }
 
-  .chip.on {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #15151a;
-    font-weight: 600;
-  }
+  .chip.pressed { transform: scale(.955); }
+  .chip.on { background: var(--accent); color: #fff; box-shadow: none; }
 
   .card {
     background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    padding: 15px;
-    margin-bottom: 18px;
+    border-radius: var(--r-card);
+    padding: 15px 16px;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 2px rgba(12, 9, 13, .05), 0 0 0 1px var(--line);
   }
 
   .card h2 {
     margin: 0 0 11px;
     font-size: 12px;
-    letter-spacing: .07em;
-    text-transform: uppercase;
-    color: var(--muted);
-    font-weight: 600;
+    font-weight: 700;
+    letter-spacing: .05em;
+    color: var(--text-3);
   }
 
-  .comp-row {
+  .comp {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    gap: 12px;
-    padding: 8px 0;
+    gap: 14px;
+    padding: 9px 0;
     border-bottom: 1px solid var(--line);
   }
+  .comp:last-of-type { border-bottom: none; }
+  .comp a { color: var(--accent); text-decoration: none; font-weight: 500; }
+  .comp .range { font-variant-numeric: tabular-nums; font-weight: 500; }
+  .comp .none { color: var(--text-3); font-size: 14px; }
 
-  .comp-row:last-child { border-bottom: none; }
-  .comp-row a { color: var(--accent); text-decoration: none; font-weight: 500; }
-  .comp-row .range { font-variant-numeric: tabular-nums; }
-  .comp-row .none { color: var(--muted); font-size: 14px; }
-
-  .hint {
-    margin-top: 11px;
-    padding-top: 11px;
+  .footnote {
+    margin-top: 12px;
+    padding-top: 12px;
     border-top: 1px solid var(--line);
     font-size: 13px;
-    color: var(--muted);
+    color: var(--text-3);
+  }
+
+  .angle {
+    background: var(--accent-soft);
+    border-radius: var(--r-ctl);
+    padding: 11px 13px;
+    font-size: 14px;
+    line-height: 1.45;
+    margin-top: 10px;
   }
 
   .price-row { display: flex; align-items: center; gap: 10px; }
   .price-row input { flex: 1; }
-  .price-row .unit { font-size: 18px; color: var(--muted); }
+  .price-row .unit { font-size: 18px; color: var(--text-3); font-weight: 500; }
 
-  .footer {
+  .notes {
+    background: var(--warn-soft);
+    border-radius: var(--r-card);
+    padding: 13px 15px;
+    margin-bottom: 20px;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--warn);
+  }
+
+  .notes strong { display: block; margin-bottom: 4px; font-size: 12px; letter-spacing: .05em; }
+
+  .bottom {
     position: fixed;
     inset-inline: 0;
     bottom: 0;
+    z-index: 20;
     padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
-    background: linear-gradient(to top, var(--bg) 72%, transparent);
+    background: color-mix(in srgb, var(--bg) 76%, transparent);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
     display: flex;
     gap: 10px;
   }
 
   button.act {
     flex: 1;
-    padding: 16px;
+    padding: 15px;
     border: none;
-    border-radius: var(--radius);
+    border-radius: 14px;
     font-size: 16px;
     font-weight: 700;
+    letter-spacing: -.01em;
     font-family: inherit;
     cursor: pointer;
-    transition: transform .2s var(--ease), opacity .2s var(--ease);
+    transition: transform .3s var(--ease), opacity .3s var(--ease);
+    touch-action: manipulation;
   }
 
-  button.act:active { transform: scale(.98); }
-  button.act:disabled { opacity: .45; }
+  button.act.pressed { transform: scale(.982); }
+  button.act:disabled { opacity: .5; }
 
-  button.draft { background: var(--surface-2); color: var(--text); border: 1px solid var(--line); }
-  button.live { background: var(--accent); color: #15151a; }
+  button.draft { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--line-strong); }
+  button.live { background: var(--accent); color: #fff; }
 
-  .state { text-align: center; padding: 70px 20px; color: var(--muted); }
-  .err { color: #e2574c; font-size: 13px; margin-top: 6px; }
+  .state { text-align: center; padding: 64px 20px; color: var(--text-2); }
+  .state.err { color: var(--danger); }
+  .err-line { color: var(--danger); font-size: 13px; margin-top: 6px; }
 
-  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition-duration: .01ms !important; }
+    .chip.pressed, button.act.pressed { transform: none; }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .bottom { background: var(--bg); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  }
 </style>
 </head>
 <body>
@@ -192,6 +250,21 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+  function pressable(el, onCommit) {
+    let active = false;
+    el.addEventListener('pointerdown', (e) => {
+      active = true; el.classList.add('pressed'); el.setPointerCapture?.(e.pointerId);
+    });
+    const release = (commit) => {
+      if (!active) return;
+      active = false; el.classList.remove('pressed');
+      if (commit) onCommit();
+    };
+    el.addEventListener('pointerup', () => release(true));
+    el.addEventListener('pointercancel', () => release(false));
+    el.addEventListener('pointerleave', () => release(false));
+  }
+
   function chips(list, selected, group) {
     return list.map((item) => {
       const on = selected.includes(item.name) ? ' on' : '';
@@ -202,21 +275,20 @@
   function competitorBlock() {
     const r = data.research;
     if (!r || !r.found) {
-      return `<div class="card"><h2>מחירים אצל המתחרים</h2>
-        <div class="comp-row"><span class="none">${esc(r?.message || 'לא נמצא אצל המתחרים')}</span></div></div>`;
+      return `<section class="card"><h2>מחירים אצל המתחרים</h2>
+        <div class="comp"><span class="none">${esc(r?.message || 'לא נמצא אצל המתחרים')}</span></div></section>`;
     }
 
     const rows = r.results.map((c) => {
       if (c.status === 'ok') {
         const range = c.min === c.max ? `${c.min} ₪` : `${c.min}-${c.max} ₪`;
-        return `<div class="comp-row"><a href="${esc(c.url)}" target="_blank">${esc(c.name)}</a><span class="range">${range}</span></div>`;
+        return `<div class="comp"><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a><span class="range">${range}</span></div>`;
       }
-      const label = c.status === 'not_found' ? 'לא נמצא' : 'לא הצלחתי לבדוק';
-      return `<div class="comp-row"><span>${esc(c.name)}</span><span class="none">${label}</span></div>`;
+      return `<div class="comp"><span>${esc(c.name)}</span><span class="none">${c.status === 'not_found' ? 'לא נמצא' : 'לא הצלחתי לבדוק'}</span></div>`;
     }).join('');
 
-    return `<div class="card"><h2>מחירים אצל המתחרים</h2>${rows}
-      <div class="hint">המחיר נקבע על ידך בלבד.</div></div>`;
+    return `<section class="card"><h2>מחירים אצל המתחרים</h2>${rows}
+      <div class="footnote">המחיר נקבע על ידך בלבד.</div></section>`;
   }
 
   function render() {
@@ -224,7 +296,7 @@
 
     root.innerHTML = `
       <div class="field">
-        <label>שם המוצר</label>
+        <label for="name">שם המוצר</label>
         <input type="text" id="name" value="${esc(c.name)}">
       </div>
 
@@ -239,31 +311,34 @@
       </div>
 
       <div class="field">
-        <label>תיאור קצר</label>
-        <textarea id="short" class="short">${esc(c.shortDescription)}</textarea>
+        <label for="short">תיאור קצר</label>
+        <textarea id="short" class="one">${esc(c.shortDescription)}</textarea>
+        <div class="hint">משפט אחד, עד 15 מילים</div>
       </div>
 
       <div class="field">
-        <label>תיאור מלא</label>
+        <label for="desc">תיאור מלא</label>
         <textarea id="desc" class="long">${esc(c.description)}</textarea>
       </div>
 
       <div class="field">
-        <label>מטא כותרת</label>
+        <label for="mtitle">מטא כותרת</label>
         <input type="text" id="mtitle" value="${esc(c.metaTitle)}">
         <div class="count" id="mtitle-count"></div>
       </div>
 
       <div class="field">
-        <label>מטא תיאור</label>
+        <label for="mdesc">מטא תיאור</label>
         <textarea id="mdesc" class="short">${esc(c.metaDescription)}</textarea>
         <div class="count" id="mdesc-count"></div>
       </div>
 
+      ${c.angle ? `<div class="angle">${esc(c.angle)}</div>` : ''}
+
       ${competitorBlock()}
 
       <div class="field">
-        <label>מחיר</label>
+        <label for="price">מחיר</label>
         <div class="price-row">
           <input type="text" id="price" inputmode="decimal" value="${c.priceFromUser ?? ''}" placeholder="לא נקבע">
           <span class="unit">₪</span>
@@ -271,41 +346,40 @@
       </div>
 
       <div class="field">
-        <label>כמות במלאי</label>
+        <label for="stock">כמות במלאי</label>
         <input type="text" id="stock" inputmode="numeric" value="${c.stockQuantity ?? ''}" placeholder="ריק = לא מנהל כמות">
       </div>
 
-      <div class="footer">
+      ${c.notes ? `<div class="notes"><strong>דברים שלא הייתי בטוח בהם</strong>${esc(c.notes)}</div>` : ''}
+
+      <div class="bottom">
         <button class="act draft" id="save-draft">שמור כטיוטה</button>
         <button class="act live" id="publish">פרסם לאוויר</button>
       </div>`;
 
     root.querySelectorAll('.chip').forEach((el) => {
-      el.addEventListener('click', () => {
+      pressable(el, () => {
         el.classList.toggle('on');
         tg?.HapticFeedback?.selectionChanged();
       });
     });
 
-    const counters = [
-      ['mtitle', 'mtitle-count', 60],
-      ['mdesc', 'mdesc-count', 155],
-    ];
+    // מונים לפי טווחי Yoast
+    [['mtitle', 'mtitle-count', 45, 60], ['mdesc', 'mdesc-count', 130, 160]]
+      .forEach(([inputId, countId, min, max]) => {
+        const input = document.getElementById(inputId);
+        const out = document.getElementById(countId);
+        const update = () => {
+          const n = input.value.length;
+          out.textContent = `${n} תווים · היעד ${min} עד ${max}`;
+          out.className = n > max ? 'count over' : (n >= min ? 'count good' : 'count');
+        };
+        input.addEventListener('input', update);
+        update();
+      });
 
-    counters.forEach(([inputId, countId, limit]) => {
-      const input = document.getElementById(inputId);
-      const out = document.getElementById(countId);
-      const update = () => {
-        const n = input.value.length;
-        out.textContent = `${n} מתוך ${limit} תווים`;
-        out.className = n > limit ? 'count over' : 'count';
-      };
-      input.addEventListener('input', update);
-      update();
-    });
-
-    document.getElementById('save-draft').addEventListener('click', () => submit('draft'));
-    document.getElementById('publish').addEventListener('click', () => submit('publish'));
+    pressable(document.getElementById('save-draft'), () => submit('draft'));
+    pressable(document.getElementById('publish'), () => submit('publish'));
   }
 
   function collect() {
@@ -328,11 +402,24 @@
     };
   }
 
+  function showError(fieldId, message) {
+    const field = document.getElementById(fieldId).closest('.field');
+    let line = field.querySelector('.err-line');
+    if (!line) {
+      line = document.createElement('div');
+      line.className = 'err-line';
+      field.appendChild(line);
+    }
+    line.textContent = message;
+    document.getElementById(fieldId).addEventListener('input', () => line.remove(), { once: true });
+  }
+
   async function submit(status) {
     const content = collect();
 
     if (!content.name) {
-      alert('צריך שם למוצר.');
+      showError('name', 'צריך שם למוצר');
+      tg?.HapticFeedback?.notificationOccurred('error');
       return;
     }
 
@@ -349,9 +436,10 @@
       if (!res.ok) throw new Error(await res.text());
 
       tg?.HapticFeedback?.notificationOccurred('success');
-      setTimeout(() => tg?.close(), 500);
-    } catch (err) {
+      setTimeout(() => tg?.close(), 450);
+    } catch {
       buttons.forEach((b) => (b.disabled = false));
+      tg?.HapticFeedback?.notificationOccurred('error');
       alert('לא הצלחתי לשמור. נסה שוב.');
     }
   }
@@ -364,7 +452,9 @@
       allTags = payload.tags;
       render();
     })
-    .catch(() => { root.innerHTML = '<div class="state">לא הצלחתי לטעון את הטיוטה.</div>'; });
+    .catch(() => {
+      root.innerHTML = '<div class="state err">לא הצלחתי לטעון את הטיוטה.</div>';
+    });
 })();
 </script>
 </body>

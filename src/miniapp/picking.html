@@ -5,28 +5,44 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>ליקוט הזמנה</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700;900&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #0d0d0f;
-    --surface: #17171b;
-    --surface-2: #1f1f25;
-    --line: #2a2a32;
-    --text: #f2f2f4;
-    --muted: #9a9aa5;
-    --accent: #c9a227;
-    --ok: #3ba55d;
-    --radius: 16px;
+    --bg: #f4f4f6;
+    --surface: #ffffff;
+    --surface-2: #ececf0;
+    --line: rgba(12, 9, 13, .09);
+    --line-strong: rgba(12, 9, 13, .16);
+    --text: #0c090d;
+    --text-2: #5c5c63;
+    --text-3: #8b8b93;
+    --accent: #0142ff;
+    --accent-soft: rgba(1, 66, 255, .09);
+    --ok: #12824a;
+    --ok-soft: rgba(18, 130, 74, .1);
+    --danger: #c92a2a;
+    --r-card: 16px;
+    --r-ctl: 12px;
     --ease: cubic-bezier(.32, .72, 0, 1);
   }
 
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme="dark"]) {
-      --bg: #f6f6f7;
-      --surface: #ffffff;
-      --surface-2: #f0f0f2;
-      --line: #e2e2e6;
-      --text: #15151a;
-      --muted: #6c6c78;
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0e0e11;
+      --surface: #1a1a1f;
+      --surface-2: #24242b;
+      --line: rgba(255, 255, 255, .09);
+      --line-strong: rgba(255, 255, 255, .18);
+      --text: #f3f3f5;
+      --text-2: #a8a8b2;
+      --text-3: #78788a;
+      --accent: #5b8bff;
+      --accent-soft: rgba(91, 139, 255, .14);
+      --ok: #3ecf8e;
+      --ok-soft: rgba(62, 207, 142, .14);
+      --danger: #ff6b6b;
     }
   }
 
@@ -34,75 +50,86 @@
 
   body {
     margin: 0;
-    padding: 0 16px calc(96px + env(safe-area-inset-bottom));
+    padding: 0 16px calc(92px + env(safe-area-inset-bottom));
     background: var(--bg);
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-family: Heebo, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-size: 16px;
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
+    overscroll-behavior-y: contain;
   }
 
-  .shipping {
+  /* כותרת שקופה שהתוכן נע מתחתיה */
+  .top {
     position: sticky;
     top: 0;
-    z-index: 10;
-    margin: 0 -16px 16px;
-    padding: 18px 16px 16px;
-    background: var(--surface);
-    border-bottom: 1px solid var(--line);
-    backdrop-filter: saturate(180%) blur(20px);
+    z-index: 20;
+    margin: 0 -16px 14px;
+    padding: 16px 16px 14px;
+    background: color-mix(in srgb, var(--bg) 72%, transparent);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
   }
 
-  .shipping .label {
+  .top::after {
+    content: '';
+    position: absolute;
+    inset-inline: 0;
+    bottom: -14px;
+    height: 14px;
+    background: linear-gradient(to bottom, var(--bg), transparent);
+    pointer-events: none;
+  }
+
+  .eyebrow {
     font-size: 12px;
-    letter-spacing: .08em;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin-bottom: 4px;
+    font-weight: 500;
+    letter-spacing: .04em;
+    color: var(--text-3);
+    margin-bottom: 3px;
   }
 
-  .shipping .method {
-    font-size: 24px;
-    font-weight: 650;
-    letter-spacing: -.02em;
+  .method {
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: -.022em;
+    line-height: 1.12;
     color: var(--accent);
   }
 
-  .shipping .meta {
-    margin-top: 6px;
-    font-size: 14px;
-    color: var(--muted);
-  }
+  .sub { margin-top: 5px; font-size: 14px; color: var(--text-2); }
 
   .card {
     background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
-    padding: 16px;
+    border-radius: var(--r-card);
+    padding: 15px 16px;
     margin-bottom: 14px;
+    box-shadow: 0 1px 2px rgba(12, 9, 13, .05), 0 0 0 1px var(--line);
   }
 
   .card h2 {
-    margin: 0 0 10px;
-    font-size: 13px;
-    letter-spacing: .06em;
-    text-transform: uppercase;
-    color: var(--muted);
-    font-weight: 600;
+    margin: 0 0 11px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .05em;
+    color: var(--text-3);
   }
 
-  .customer-row { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; }
-  .customer-row span:first-child { color: var(--muted); flex-shrink: 0; }
-  .customer-row span:last-child { text-align: left; }
-  .customer-row a { color: var(--accent); text-decoration: none; }
+  .row { display: flex; justify-content: space-between; gap: 14px; padding: 5px 0; font-size: 15px; }
+  .row dt { color: var(--text-2); flex-shrink: 0; margin: 0; }
+  .row dd { margin: 0; text-align: left; font-weight: 500; }
+  .row a { color: var(--accent); text-decoration: none; font-weight: 500; }
+
+  dl { margin: 0; }
 
   .note {
-    margin-top: 10px;
-    padding: 10px 12px;
-    background: var(--surface-2);
-    border-radius: 10px;
+    margin-top: 11px;
+    padding: 11px 13px;
+    background: var(--accent-soft);
+    border-radius: var(--r-ctl);
     font-size: 15px;
+    line-height: 1.45;
   }
 
   ul.items { list-style: none; margin: 0; padding: 0; }
@@ -110,87 +137,111 @@
   li.item {
     display: flex;
     align-items: center;
-    gap: 14px;
-    padding: 12px;
-    margin-bottom: 10px;
+    gap: 13px;
+    padding: 11px;
+    margin-bottom: 9px;
     background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: var(--radius);
+    border-radius: var(--r-card);
+    box-shadow: 0 1px 2px rgba(12, 9, 13, .05), 0 0 0 1px var(--line);
     cursor: pointer;
-    transition: transform .22s var(--ease), opacity .22s var(--ease), border-color .22s var(--ease);
+    transition: transform .36s var(--ease), box-shadow .36s var(--ease), opacity .36s var(--ease);
+    touch-action: manipulation;
   }
 
-  li.item:active { transform: scale(.985); }
+  li.item.pressed { transform: scale(.975); }
 
-  li.item.picked { opacity: .5; border-color: var(--ok); }
-  li.item.picked .name { text-decoration: line-through; }
+  li.item.picked {
+    opacity: .52;
+    box-shadow: 0 1px 2px rgba(12, 9, 13, .04), 0 0 0 1px var(--ok);
+  }
+
+  li.item.picked .name { text-decoration: line-through; text-decoration-thickness: 1.5px; }
 
   .thumb {
-    width: 58px; height: 58px;
+    width: 54px; height: 54px;
     flex-shrink: 0;
-    border-radius: 12px;
+    border-radius: 11px;
     object-fit: cover;
     background: var(--surface-2);
   }
 
   .info { flex: 1; min-width: 0; }
-  .name { font-weight: 600; letter-spacing: -.01em; }
-  .sku { font-size: 13px; color: var(--muted); margin-top: 2px; }
+  .name { font-weight: 500; letter-spacing: -.008em; line-height: 1.3; }
+  .sku { font-size: 13px; color: var(--text-3); margin-top: 2px; }
 
   .qty {
     flex-shrink: 0;
-    min-width: 44px;
+    min-width: 38px;
     text-align: center;
-    font-size: 20px;
+    font-size: 19px;
     font-weight: 700;
-    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.02em;
   }
 
   .check {
     flex-shrink: 0;
-    width: 28px; height: 28px;
-    border: 2px solid var(--line);
+    width: 26px; height: 26px;
+    border: 2px solid var(--line-strong);
     border-radius: 50%;
     display: grid;
     place-items: center;
-    transition: background .22s var(--ease), border-color .22s var(--ease);
+    transition: background .3s var(--ease), border-color .3s var(--ease), transform .3s var(--ease);
   }
 
-  li.item.picked .check { background: var(--ok); border-color: var(--ok); }
-  .check svg { opacity: 0; transition: opacity .18s var(--ease); }
+  li.item.picked .check { background: var(--ok); border-color: var(--ok); transform: scale(1.06); }
+  .check svg { opacity: 0; transition: opacity .2s var(--ease); }
   li.item.picked .check svg { opacity: 1; }
 
-  .footer {
+  .bottom {
     position: fixed;
     inset-inline: 0;
     bottom: 0;
+    z-index: 20;
     padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
-    background: linear-gradient(to top, var(--bg) 70%, transparent);
+    background: color-mix(in srgb, var(--bg) 76%, transparent);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+  }
+
+  .progress {
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-2);
+    margin-bottom: 9px;
+    font-variant-numeric: tabular-nums;
   }
 
   button.done {
     width: 100%;
-    padding: 17px;
+    padding: 16px;
     border: none;
     border-radius: 14px;
     background: var(--accent);
-    color: #15151a;
+    color: #fff;
     font-size: 17px;
     font-weight: 700;
+    letter-spacing: -.01em;
     font-family: inherit;
     cursor: pointer;
-    transition: transform .22s var(--ease), opacity .22s var(--ease);
+    transition: transform .3s var(--ease), opacity .3s var(--ease), background .3s var(--ease);
+    touch-action: manipulation;
   }
 
-  button.done:active { transform: scale(.98); }
-  button.done:disabled { opacity: .45; cursor: default; }
+  button.done.pressed { transform: scale(.982); }
+  button.done:disabled { opacity: .5; }
+  button.done.success { background: var(--ok); }
 
-  .progress { text-align: center; font-size: 13px; color: var(--muted); margin-bottom: 10px; }
-
-  .state { text-align: center; padding: 60px 20px; color: var(--muted); }
+  .state { text-align: center; padding: 64px 20px; color: var(--text-2); }
+  .state.err { color: var(--danger); }
 
   @media (prefers-reduced-motion: reduce) {
-    * { transition: none !important; }
+    * { transition-duration: .01ms !important; }
+    li.item.pressed, button.done.pressed { transform: none; }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .top, .bottom { background: var(--bg); backdrop-filter: none; -webkit-backdrop-filter: none; }
   }
 </style>
 </head>
@@ -211,26 +262,50 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+  // משוב מיידי בלחיצה, לא בשחרור
+  function pressable(el, onCommit) {
+    let active = false;
+
+    el.addEventListener('pointerdown', (e) => {
+      active = true;
+      el.classList.add('pressed');
+      el.setPointerCapture?.(e.pointerId);
+    });
+
+    const release = (commit) => {
+      if (!active) return;
+      active = false;
+      el.classList.remove('pressed');
+      if (commit) onCommit();
+    };
+
+    el.addEventListener('pointerup', () => release(true));
+    el.addEventListener('pointercancel', () => release(false));
+    el.addEventListener('pointerleave', () => release(false));
+  }
+
   function render() {
     const c = data.customer;
 
     root.innerHTML = `
-      <div class="shipping">
-        <div class="label">שיטת משלוח</div>
+      <header class="top">
+        <div class="eyebrow">שיטת משלוח</div>
         <div class="method">${esc(data.shippingMethod)}</div>
-        <div class="meta">הזמנה #${esc(data.number)} · ממתינה ${esc(data.waitingFor)}</div>
-      </div>
+        <div class="sub">הזמנה #${esc(data.number)} · ממתינה ${esc(data.waitingFor)}</div>
+      </header>
 
-      <div class="card">
+      <section class="card">
         <h2>פרטי לקוח</h2>
-        <div class="customer-row"><span>שם</span><span>${esc(c.name)}</span></div>
-        ${c.phone ? `<div class="customer-row"><span>טלפון</span><a href="tel:${esc(c.phone)}">${esc(c.phone)}</a></div>` : ''}
-        ${c.address ? `<div class="customer-row"><span>כתובת</span><span>${esc(c.address)}</span></div>` : ''}
-        <div class="customer-row"><span>סכום</span><span>${esc(data.total)} ₪</span></div>
+        <dl>
+          <div class="row"><dt>שם</dt><dd>${esc(c.name)}</dd></div>
+          ${c.phone ? `<div class="row"><dt>טלפון</dt><dd><a href="tel:${esc(c.phone)}">${esc(c.phone)}</a></dd></div>` : ''}
+          ${c.address ? `<div class="row"><dt>כתובת</dt><dd>${esc(c.address)}</dd></div>` : ''}
+          <div class="row"><dt>סכום</dt><dd>${esc(data.total)} ₪</dd></div>
+        </dl>
         ${data.note ? `<div class="note">${esc(data.note)}</div>` : ''}
-      </div>
+      </section>
 
-      <div class="card">
+      <section class="card">
         <h2>פריטים לליקוט</h2>
         <ul class="items">
           ${data.items.map((item) => `
@@ -244,22 +319,22 @@
               </div>
               <div class="qty">${item.quantity}</div>
               <div class="check">
-                <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                  <path d="M3 8.5L6.2 11.5L13 4.5" stroke="#fff" stroke-width="2.2"
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <path d="M3 8.5L6.2 11.5L13 4.5" stroke="#fff" stroke-width="2.4"
                         stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
               </div>
             </li>`).join('')}
         </ul>
-      </div>
+      </section>
 
-      <div class="footer">
+      <div class="bottom">
         <div class="progress" id="progress"></div>
         <button class="done" id="done">הזמנה הושלמה</button>
       </div>`;
 
     root.querySelectorAll('li.item').forEach((el) => {
-      el.addEventListener('click', () => {
+      pressable(el, () => {
         const id = el.dataset.id;
         if (picked.has(id)) { picked.delete(id); el.classList.remove('picked'); }
         else { picked.add(id); el.classList.add('picked'); tg?.HapticFeedback?.impactOccurred('light'); }
@@ -267,17 +342,21 @@
       });
     });
 
-    document.getElementById('done').addEventListener('click', complete);
+    const doneBtn = document.getElementById('done');
+    pressable(doneBtn, complete);
+
     updateProgress();
   }
 
   function updateProgress() {
-    const total = data.items.length;
-    document.getElementById('progress').textContent = `${picked.size} מתוך ${total} פריטים סומנו`;
+    document.getElementById('progress').textContent =
+      `${picked.size} מתוך ${data.items.length} פריטים סומנו`;
   }
 
   async function complete() {
     const btn = document.getElementById('done');
+    if (btn.disabled) return;
+
     btn.disabled = true;
     btn.textContent = 'סוגר…';
 
@@ -290,12 +369,15 @@
 
       if (!res.ok) throw new Error(await res.text());
 
-      btn.textContent = 'הושלמה ✓';
+      btn.classList.add('success');
+      btn.textContent = 'הושלמה';
       tg?.HapticFeedback?.notificationOccurred('success');
-      setTimeout(() => tg?.close(), 700);
-    } catch (err) {
+      setTimeout(() => tg?.close(), 650);
+    } catch {
       btn.disabled = false;
+      btn.classList.remove('success');
       btn.textContent = 'הזמנה הושלמה';
+      tg?.HapticFeedback?.notificationOccurred('error');
       alert('לא הצלחתי לסגור את ההזמנה. נסה שוב.');
     }
   }
@@ -303,7 +385,9 @@
   fetch(`/api/picking/${orderId}`)
     .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
     .then((payload) => { data = payload; render(); })
-    .catch(() => { root.innerHTML = '<div class="state">לא הצלחתי לטעון את ההזמנה.</div>'; });
+    .catch(() => {
+      root.innerHTML = '<div class="state err">לא הצלחתי לטעון את ההזמנה.</div>';
+    });
 })();
 </script>
 </body>
