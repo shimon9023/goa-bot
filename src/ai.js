@@ -273,42 +273,65 @@ ${knownProducts.map((p) => `- ${p.name}`).join('\n')}
   });
 }
 
-// --- Gemini: תמלול הקלטות ---
+// --- Gemini: קריאה שעובדת עם שני פורמטי המפתח ---
+// גוגל עברה ממפתחות שמתחילים ב-AIza למפתחות שמתחילים ב-AQ.
+// הישנים נשלחים ככותרת x-goog-api-key, החדשים לפעמים דורשים Bearer.
+// מנסים את הדרך הרגילה, ואם חוזר 401 מנסים את השנייה.
 
-export async function transcribe(audioUrl) {
+async function callGemini(model, body) {
   if (!config.ai.geminiKey) {
     throw new Error('חסר מפתח של Gemini. הוסף GEMINI_API_KEY בהגדרות השרת.');
   }
 
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const key = config.ai.geminiKey;
+
+  const attempts = [
+    { 'x-goog-api-key': key },
+    { Authorization: `Bearer ${key}` },
+  ];
+
+  let lastError = '';
+
+  for (const authHeader of attempts) {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeader },
+      body: JSON.stringify(body),
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (response.ok) return data;
+
+    lastError = data?.error?.message || `HTTP ${response.status}`;
+
+    // רק שגיאת הרשאה מצדיקה ניסיון בדרך השנייה
+    if (response.status !== 401 && response.status !== 403) break;
+  }
+
+  throw new Error(`Gemini: ${lastError}`);
+}
+
+// --- Gemini: תמלול הקלטות ---
+
+export async function transcribe(audioUrl) {
   const audio = await fetch(audioUrl);
   if (!audio.ok) throw new Error('לא הצלחתי להוריד את ההקלטה.');
 
   const buffer = Buffer.from(await audio.arrayBuffer());
   const mimeType = audio.headers.get('content-type') || 'audio/ogg';
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_TEXT_MODEL}:generateContent?key=${config.ai.geminiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: 'תמלל את ההקלטה הזו לעברית. החזר רק את התמלול, בלי הסברים.' },
-              { inline_data: { mime_type: mimeType, data: buffer.toString('base64') } },
-            ],
-          },
+  const data = await callGemini(GEMINI_TEXT_MODEL, {
+    contents: [
+      {
+        parts: [
+          { text: 'תמלל את ההקלטה הזו לעברית. החזר רק את התמלול, בלי הסברים.' },
+          { inline_data: { mime_type: mimeType, data: buffer.toString('base64') } },
         ],
-      }),
-    }
-  );
-
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(`Gemini: ${data?.error?.message || response.status}`);
-  }
+      },
+    ],
+  });
 
   await recordSpend({
     kind: 'transcribe',
@@ -348,10 +371,6 @@ export const IMAGE_PROMPTS = {
 };
 
 export async function generateProductImage(imageUrl, { kind = 'product', clothingType = 'shirt', correctionHint = '' } = {}) {
-  if (!config.ai.geminiKey) {
-    throw new Error('חסר מפתח של Gemini. הוסף GEMINI_API_KEY בהגדרות השרת.');
-  }
-
   const basePrompt =
     kind === 'clothing'
       ? IMAGE_PROMPTS.clothing[clothingType] || IMAGE_PROMPTS.clothing.shirt
@@ -366,29 +385,16 @@ export async function generateProductImage(imageUrl, { kind = 'product', clothin
   const buffer = Buffer.from(await source.arrayBuffer());
   const mimeType = source.headers.get('content-type') || 'image/jpeg';
 
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent?key=${config.ai.geminiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: prompt },
-              { inline_data: { mime_type: mimeType, data: buffer.toString('base64') } },
-            ],
-          },
+  const data = await callGemini(GEMINI_IMAGE_MODEL, {
+    contents: [
+      {
+        parts: [
+          { text: prompt },
+          { inline_data: { mime_type: mimeType, data: buffer.toString('base64') } },
         ],
-      }),
-    }
-  );
-
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    throw new Error(`Gemini: ${data?.error?.message || response.status}`);
-  }
+      },
+    ],
+  });
 
   await recordSpend({ kind: 'image', images: 1 });
 
