@@ -8,6 +8,7 @@ import * as db from './db.js';
 import { supabase } from './db.js';
 import * as ai from './ai.js';
 import * as competitors from './competitors.js';
+import * as imagestore from './imagestore.js';
 import { config } from './config.js';
 import {
   sendMessage,
@@ -157,14 +158,34 @@ export async function buildDraft(chatId, userId) {
 
   await sendMessage(chatId, 'עובד על זה, זה לוקח כמה שניות.');
 
-  // קוראים את התמונה הראשונה
+  // קוראים את כל התמונות יחד, כדי לזהות גם וריאציות
+  let vision = null;
   let imageDescription = '';
+
   if (state.photos?.length) {
     try {
-      imageDescription = await ai.describeProductImage(await resolvePhotoUrl(state.photos[0]));
+      const urls = await Promise.all(state.photos.map(resolvePhotoUrl));
+      vision = await ai.describeProductImages(urls);
+
+      imageDescription = [
+        vision.overall,
+        vision.brand ? `מותג: ${vision.brand}` : '',
+        vision.model ? `דגם: ${vision.model}` : '',
+        vision.looksLikeVariants
+          ? `נראה שזה מוצר אחד ב-${vision.perImage?.length || 0} גרסאות, לפי ${vision.variantAttribute || 'מאפיין'}`
+          : '',
+      ].filter(Boolean).join('\n');
     } catch (error) {
-      console.error('קריאת התמונה נכשלה:', error.message);
+      console.error('קריאת התמונות נכשלה:', error.message);
     }
+  }
+
+  // מחקר באינטרנט, כדי למלא מה שלא רואים בתמונה
+  let webContext = '';
+  const researchName = [vision?.brand, vision?.model].filter(Boolean).join(' ');
+
+  if (researchName) {
+    webContext = await ai.researchProduct(researchName, state.spoken || '');
   }
 
   const [categories, tags] = await Promise.all([woo.getCategories(), woo.getTags()]);
@@ -174,6 +195,7 @@ export async function buildDraft(chatId, userId) {
     imageDescription,
     categories,
     tags,
+    webContext,
   });
 
   // המטא נכתב בקריאה נפרדת, עם כללי ה-SEO של GOA
@@ -200,35 +222,70 @@ export async function buildDraft(chatId, userId) {
 
   const draftId = randomUUID();
 
+  const variants = buildVariantPlan(vision, state.photos || []);
+
   await saveDraft(
     draftId,
     userId,
-    { ...content, ...meta, research },
+    { ...content, ...meta, research, variants, variantAttribute: vision?.variantAttribute || 'טעם' },
     state.photos || []
   );
 
-  await db.setState(userId, { module: 'product', mode: state.mode, draftId });
+  // שומרים את התמונות במצב. בלי זה תיקון בהקלטה בנה טיוטה בלי תמונות.
+  await db.setState(userId, {
+    module: 'product',
+    mode: state.mode,
+    draftId,
+    photos: state.photos || [],
+    spoken: state.spoken || '',
+  });
 
   const editorUrl = `${config.publicBaseUrl}/product/${draftId}`;
+
+  const notes = Array.isArray(content.notes)
+    ? content.notes
+    : (content.notes ? [content.notes] : []);
 
   const summary = [
     `<b>${content.name}</b>`,
     '',
     content.shortDescription || '',
     '',
+    variants.length
+      ? `${variants.length} וריאציות לפי ${vision?.variantAttribute || 'טעם'}`
+      : '',
     content.priceFromUser
-      ? `המחיר שאמרת: ${content.priceFromUser} ₪`
-      : 'לא אמרת מחיר. בתוך המסך יש את המחירים אצל המתחרים.',
-    content.notes ? `\n<i>${content.notes}</i>` : '',
-  ].filter(Boolean).join('\n');
+      ? `מחיר: ${content.priceFromUser} ₪`
+      : 'לא אמרת מחיר.',
+    notes.length ? '' : null,
+    ...notes.slice(0, 3).map((n) => `• ${n}`),
+  ].filter((line) => line !== null && line !== undefined).join('\n');
 
-  await sendMessage(chatId, summary, {
-    reply_markup: inlineKeyboard([
-      [webAppButton('פתח לעריכה', editorUrl)],
-      [button('תקן בהקלטה או בטקסט', `prod:revise:${draftId}`)],
-      [button('עבור לתמונות', `prod:images:${draftId}`)],
-    ]),
-  });
+  const rows = [[webAppButton('פתח לעריכה', editorUrl)]];
+
+  if (variants.length) rows.push([button(`אשר ${variants.length} וריאציות`, `prod:vars:${draftId}`)]);
+
+  rows.push([button('תקן בהקלטה או בטקסט', `prod:revise:${draftId}`)]);
+  rows.push([button('עבור לתמונות', `prod:images:${draftId}`)]);
+
+  await sendMessage(chatId, summary, { reply_markup: inlineKeyboard(rows) });
+}
+
+// --- תכנון וריאציות ---
+// מצמיד כל תמונה לערך שנקרא ממנה. תמונה שלא זוהתה נשארת בלי ערך,
+// ושמעון משלים אותה.
+
+function buildVariantPlan(vision, photos) {
+  if (!vision?.looksLikeVariants || !Array.isArray(vision.perImage)) return [];
+  if (vision.perImage.length < 2) return [];
+
+  return vision.perImage
+    .map((item) => ({
+      value: item.label || null,
+      certain: Boolean(item.certain && item.label),
+      photo: photos[(item.index || 1) - 1] || null,
+    }))
+    .filter((v) => v.photo);
 }
 
 // --- תיקון בשפה חופשית ---
@@ -292,23 +349,62 @@ export async function generateImage(chatId, userId, draftId, kind, correctionHin
   const settings = await db.getSettings();
   await ai.assertWithinBudget(settings);
 
-  await sendMessage(chatId, 'מייצר תמונה.');
+  const variants = (draft.content.variants || []).filter((v) => v.value);
+  const total = variants.length >= 2 ? variants.length : 1;
 
-  const sourceUrl = await resolvePhotoUrl(draft.images[0]);
+  await sendMessage(
+    chatId,
+    total > 1
+      ? `מייצר ${total} תמונות, אחת לכל וריאציה. זה ייקח כמה דקות.`
+      : 'מייצר תמונה.'
+  );
+
   const isClothing = kind !== 'product';
+  const sources = total > 1 ? variants.map((v) => v.photo) : [draft.images[0]];
 
-  const result = await ai.generateProductImage(sourceUrl, {
-    kind: isClothing ? 'clothing' : 'product',
-    clothingType: kind,
-    correctionHint,
+  const produced = [];
+  const failed = [];
+
+  for (const [index, source] of sources.entries()) {
+    try {
+      const sourceUrl = await resolvePhotoUrl(source);
+
+      const result = await ai.generateProductImage(sourceUrl, {
+        kind: isClothing ? 'clothing' : 'product',
+        clothingType: kind,
+        correctionHint,
+      });
+
+      // מגישים את התמונה מהשרת שלנו, וווקומרס ימשוך אותה.
+      // העלאה ישירה לספריית המדיה חסומה למפתחות ווקומרס.
+      const id = imagestore.put(result.buffer, result.mimeType);
+      const url = imagestore.publicUrl(config.publicBaseUrl, id, result.mimeType);
+
+      produced.push({ url, label: variants[index]?.value || null });
+    } catch (error) {
+      console.error(`יצירת תמונה ${index + 1} נכשלה:`, error.message);
+      failed.push(variants[index]?.value || `תמונה ${index + 1}`);
+    }
+  }
+
+  if (!produced.length) {
+    await sendMessage(chatId, 'לא הצלחתי לייצר אף תמונה. אפשר לפרסם עם התמונות המקוריות.', {
+      reply_markup: inlineKeyboard([[button('המשך בלי עריכה', `prod:imgskip:${draftId}`)]]),
+    });
+    return;
+  }
+
+  // התמונה הראשונה היא הראשית, והשאר נכנסות לגלריה ולווריאציות
+  const updatedVariants = variants.map((v) => {
+    const match = produced.find((p) => p.label === v.value);
+    return match ? { ...v, imageUrl: match.url } : v;
   });
-
-  // מעלים לספריית המדיה של האתר כדי שתהיה כתובת קבועה
-  const uploaded = await woo.uploadMedia(result.buffer, result.mimeType, draft.content.name);
 
   const content = {
     ...draft.content,
-    generatedImage: uploaded.source_url,
+    generatedImage: produced[0].url,
+    extraImages: produced.slice(1).map((p) => p.url),
+    variants: updatedVariants,
     imageKind: kind,
   };
 
@@ -317,18 +413,44 @@ export async function generateImage(chatId, userId, draftId, kind, correctionHin
   if (correctionHint) {
     await ai.saveImageFeedback({
       productName: draft.content.name,
-      beforeUrl: draft.content.generatedImage || sourceUrl,
+      beforeUrl: draft.content.generatedImage || '',
       note: correctionHint,
-      afterUrl: uploaded.source_url,
+      afterUrl: produced[0].url,
     });
   }
 
-  await sendPhoto(chatId, uploaded.source_url, 'איך זה נראה?', {
+  const caption = [
+    produced.length > 1 ? `${produced.length} תמונות מוכנות. זו הראשונה.` : 'איך זה נראה?',
+    failed.length ? `נכשלו: ${failed.join(', ')}` : '',
+  ].filter(Boolean).join('\n');
+
+  await sendPhoto(chatId, produced[0].url, caption, {
     reply_markup: inlineKeyboard([
       [button('אהבתי', `prod:imgok:${draftId}`)],
       [button('ייצר שוב', `prod:regen:${kind}:${draftId}`)],
       [button('תקן לפי הערה', `prod:imgfix:${kind}:${draftId}`)],
     ]),
+  });
+}
+
+// ממשיכים בלי לערוך, עם התמונות שצולמו
+export async function skipImageEditing(chatId, userId, draftId) {
+  const draft = await getDraft(draftId);
+  if (!draft) return;
+
+  const urls = await Promise.all((draft.images || []).map(resolvePhotoUrl));
+
+  await saveDraft(
+    draftId,
+    userId,
+    { ...draft.content, generatedImage: urls[0] || null, extraImages: urls.slice(1) },
+    draft.images
+  );
+
+  const editorUrl = `${config.publicBaseUrl}/product/${draftId}`;
+
+  await sendMessage(chatId, 'ממשיך עם התמונות המקוריות.', {
+    reply_markup: inlineKeyboard([[webAppButton('פתח לעריכה ופרסום', editorUrl)]]),
   });
 }
 
@@ -357,28 +479,74 @@ export async function publish(chatId, userId, draftId, status) {
     .filter(Boolean)
     .map((t) => ({ id: t.id }));
 
+  const variants = (content.variants || []).filter((v) => v.value);
+  const isVariable = variants.length >= 2;
+  const attribute = content.variantAttribute || 'טעם';
+
   const payload = {
     name: content.name,
-    type: 'simple',
+    type: isVariable ? 'variable' : 'simple',
     status: status === 'publish' ? 'publish' : 'draft',
     description: content.description || '',
     short_description: content.shortDescription || '',
     categories: categoryIds,
     tags: tagIds,
-    manage_stock: content.stockQuantity !== undefined && content.stockQuantity !== null,
-    stock_quantity: content.stockQuantity ?? null,
-    stock_status: content.stockQuantity > 0 ? 'instock' : 'outofstock',
   };
 
-  if (content.priceFromUser) {
-    payload.regular_price = String(content.priceFromUser);
+  // במוצר עם וריאציות המלאי מנוהל בתוך הווריאציות
+  if (!isVariable) {
+    payload.manage_stock = content.stockQuantity !== undefined && content.stockQuantity !== null;
+    payload.stock_quantity = content.stockQuantity ?? null;
+    payload.stock_status = content.stockQuantity > 0 ? 'instock' : 'outofstock';
+
+    if (content.priceFromUser) payload.regular_price = String(content.priceFromUser);
   }
 
-  if (content.generatedImage) {
-    payload.images = [{ src: content.generatedImage }];
+  // התמונות: הראשית ואחריהן כל השאר
+  const gallery = [];
+  if (content.generatedImage) gallery.push({ src: content.generatedImage });
+  for (const extra of content.extraImages || []) gallery.push({ src: extra });
+  if (gallery.length) payload.images = gallery;
+
+  // התכונה שלפיה נבנות הווריאציות
+  if (isVariable) {
+    payload.attributes = [
+      {
+        name: attribute,
+        visible: true,
+        variation: true,
+        options: variants.map((v) => v.value),
+      },
+    ];
   }
 
   const created = await woo.createProduct(payload);
+
+  // יצירת הווריאציות עצמן
+  let variantsCreated = 0;
+  const variantsFailed = [];
+
+  if (isVariable) {
+    for (const variant of variants) {
+      try {
+        const fields = {
+          attributes: [{ name: attribute, option: variant.value }],
+          manage_stock: variant.quantity !== undefined && variant.quantity !== null,
+          stock_quantity: variant.quantity ?? null,
+          stock_status: (variant.quantity ?? 1) > 0 ? 'instock' : 'outofstock',
+        };
+
+        if (content.priceFromUser) fields.regular_price = String(content.priceFromUser);
+        if (variant.imageUrl) fields.image = { src: variant.imageUrl };
+
+        await woo.createVariation(created.id, fields);
+        variantsCreated += 1;
+      } catch (error) {
+        console.error(`וריאציה "${variant.value}" נכשלה:`, error.message);
+        variantsFailed.push(variant.value);
+      }
+    }
+  }
 
   // מטא SEO של Yoast. דורש את הסניפט שפותח את ההרשאה באתר.
   let metaWarning = '';
@@ -415,9 +583,101 @@ export async function publish(chatId, userId, draftId, status) {
       status === 'publish' ? '<b>המוצר באוויר</b>' : '<b>נשמר כטיוטה</b>',
       '',
       created.name,
+      isVariable ? `${variantsCreated} וריאציות נוצרו` : '',
+      variantsFailed.length ? `נכשלו: ${variantsFailed.join(', ')}` : '',
       created.permalink,
       metaWarning,
     ].filter(Boolean).join('\n'),
     { reply_markup: mainKeyboard }
   );
+}
+
+// --- מסך אישור הווריאציות ---
+
+export async function showVariants(chatId, userId, draftId) {
+  const draft = await getDraft(draftId);
+  if (!draft) {
+    await sendMessage(chatId, 'הטיוטה לא נמצאה.');
+    return;
+  }
+
+  const variants = draft.content.variants || [];
+  const attribute = draft.content.variantAttribute || 'טעם';
+
+  if (!variants.length) {
+    await sendMessage(chatId, 'לא זיהיתי וריאציות במוצר הזה.');
+    return;
+  }
+
+  const unknown = variants.filter((v) => !v.certain).length;
+
+  const lines = [
+    `<b>${variants.length} וריאציות לפי ${attribute}</b>`,
+    '',
+    ...variants.map((v, i) =>
+      v.certain ? `${i + 1}. ${v.value}` : `${i + 1}. ❓ ${v.value || 'לא הצלחתי לקרוא'}`
+    ),
+  ];
+
+  if (unknown) {
+    lines.push('', `<i>${unknown} לא ודאיות. אפשר להכתיב את הרשימה המלאה ואני אחליף.</i>`);
+  }
+
+  lines.push('', 'מאשר?');
+
+  await db.setState(userId, {
+    ...(await db.getState(userId)),
+    module: 'product',
+    draftId,
+    awaiting: 'variants',
+  });
+
+  await sendMessage(chatId, lines.join('\n'), {
+    reply_markup: inlineKeyboard([
+      [button('כן, זה נכון', `prod:varsok:${draftId}`)],
+      [button('אכתיב את הרשימה', `prod:varsedit:${draftId}`)],
+      [button('בלי וריאציות', `prod:varsoff:${draftId}`)],
+    ]),
+  });
+}
+
+// שמעון הכתיב רשימת ערכים, מחליפים לפי הסדר
+export async function replaceVariantValues(chatId, userId, draftId, text) {
+  const draft = await getDraft(draftId);
+  if (!draft) {
+    await sendMessage(chatId, 'הטיוטה לא נמצאה.');
+    return;
+  }
+
+  const values = text
+    .split(/[,\n]/)
+    .map((v) => v.replace(/^\s*\d+[.)]\s*/, '').trim())
+    .filter(Boolean);
+
+  const variants = draft.content.variants || [];
+
+  if (values.length !== variants.length) {
+    await sendMessage(
+      chatId,
+      `קיבלתי ${values.length} ערכים אבל יש ${variants.length} תמונות. תשלח רשימה באותו אורך, לפי סדר התמונות.`
+    );
+    return;
+  }
+
+  const updated = variants.map((v, i) => ({ ...v, value: values[i], certain: true }));
+
+  await saveDraft(draftId, userId, { ...draft.content, variants: updated }, draft.images);
+  await showVariants(chatId, userId, draftId);
+}
+
+export async function dropVariants(chatId, userId, draftId) {
+  const draft = await getDraft(draftId);
+  if (!draft) return;
+
+  await saveDraft(draftId, userId, { ...draft.content, variants: [] }, draft.images);
+  await db.clearState(userId);
+
+  await sendMessage(chatId, 'בסדר, מוצר רגיל בלי וריאציות.', {
+    reply_markup: inlineKeyboard([[button('עבור לתמונות', `prod:images:${draftId}`)]]),
+  });
 }

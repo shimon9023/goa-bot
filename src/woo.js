@@ -191,6 +191,8 @@ export function getTags() {
 
 const WP_BASE = `${config.woo.siteUrl}/wp-json/wp/v2`;
 
+// העלאה ישירה לספריית המדיה. מפתחות ווקומרס בדרך כלל חסומים כאן,
+// ולכן זו לא הדרך הראשית. ראה putImageOnProduct למטה.
 export async function uploadMedia(buffer, mimeType, title = 'product') {
   const extension = mimeType.includes('png') ? 'png' : 'jpg';
   const safeName = title.replace(/[^\p{L}\p{N}]+/gu, '-').slice(0, 60) || 'product';

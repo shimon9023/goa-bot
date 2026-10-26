@@ -13,6 +13,7 @@ import * as products from './products.js';
 import * as checks from './checks.js';
 import * as settings from './settings.js';
 import * as freetext from './freetext.js';
+import * as imagestore from './imagestore.js';
 import * as woo from './woo.js';
 import * as ai from './ai.js';
 import { startSchedulers, runAllChecks } from './alerts.js';
@@ -111,7 +112,30 @@ async function handleMessage(message) {
 
     if (state?.module === 'product') {
       await sendMessage(chatId, 'מתמלל.');
-      const transcript = await products.collectVoice(userId, message.voice || message.audio);
+
+      const file = await getFile((message.voice || message.audio).file_id);
+      const transcript = await ai.transcribe(fileUrl(file.file_path));
+
+      // כשהוא באמצע תיקון, ההקלטה היא ההוראה ולא איסוף מידע חדש
+      if (state.awaiting === 'revise') {
+        await sendMessage(chatId, `שמעתי:\n<i>${transcript}</i>`);
+        await products.reviseDraft(chatId, userId, state.draftId, transcript);
+        return;
+      }
+
+      if (state.awaiting === 'variantList') {
+        await sendMessage(chatId, `שמעתי:\n<i>${transcript}</i>`);
+        await products.replaceVariantValues(chatId, userId, state.draftId, transcript);
+        return;
+      }
+
+      if (state.awaiting === 'imageFix') {
+        await db.setState(userId, { ...state, awaiting: null });
+        await products.generateImage(chatId, userId, state.draftId, state.imageKind, transcript);
+        return;
+      }
+
+      await products.collectText(userId, transcript);
       await sendMessage(chatId, `שמעתי:\n<i>${transcript}</i>\n\nעוד משהו, או "מוכן"?`, {
         reply_markup: inlineKeyboard([[button('מוכן', 'prod:ready')]]),
       });
@@ -195,6 +219,11 @@ async function handleTextInput(chatId, userId, text) {
   if (state?.module === 'product' && state.awaiting === 'imageFix') {
     await db.setState(userId, { ...state, awaiting: null });
     await products.generateImage(chatId, userId, state.draftId, state.imageKind, text);
+    return;
+  }
+
+  if (state?.module === 'product' && state.awaiting === 'variantList') {
+    await products.replaceVariantValues(chatId, userId, state.draftId, text);
     return;
   }
 
@@ -430,6 +459,37 @@ async function handleProductCallback(chatId, userId, action, rest) {
     case 'publish':
       await products.publish(chatId, userId, rest[0], 'publish');
       break;
+
+    case 'vars':
+      await products.showVariants(chatId, userId, rest[0]);
+      break;
+
+    case 'varsok':
+      await db.clearState(userId);
+      await sendMessage(chatId, 'מאושר. עכשיו התמונות.', {
+        reply_markup: inlineKeyboard([[button('עבור לתמונות', `prod:images:${rest[0]}`)]]),
+      });
+      break;
+
+    case 'varsedit': {
+      const state = await db.getState(userId);
+      await db.setState(userId, {
+        ...state, module: 'product', draftId: rest[0], awaiting: 'variantList',
+      });
+      await sendMessage(
+        chatId,
+        'תכתיב או תכתוב את הרשימה המלאה, לפי סדר התמונות, מופרדת בפסיקים או בשורות.'
+      );
+      break;
+    }
+
+    case 'varsoff':
+      await products.dropVariants(chatId, userId, rest[0]);
+      break;
+
+    case 'imgskip':
+      await products.skipImageEditing(chatId, userId, rest[0]);
+      break;
   }
 }
 
@@ -590,6 +650,20 @@ app.post('/cron/run-checks', async (req, res) => {
   }
 });
 
+// --- הגשת תמונות שנוצרו ---
+// ווקומרס מוריד מכאן את התמונה ומכניס אותה לספריית המדיה.
+
+app.get('/img/:file', (req, res) => {
+  const id = String(req.params.file).replace(/\.(png|jpg|jpeg)$/i, '');
+  const item = imagestore.get(id);
+
+  if (!item) return res.sendStatus(404);
+
+  res.set('Content-Type', item.mimeType);
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.send(item.buffer);
+});
+
 // --- בדיקת חיים, בשביל Render ---
 
 app.get('/health', (req, res) => res.json({ ok: true }));
@@ -647,6 +721,8 @@ app.listen(config.port, async () => {
 
   // בתוכנית החינמית השרת נרדם, אז המתזמן הפנימי לא אמין
   // ומייק הוא זה שמעיר ומריץ. בתוכנית בתשלום המתזמן עובד כרגיל.
+  imagestore.startCleanup();
+
   if (process.env.USE_INTERNAL_SCHEDULER !== 'false') {
     startSchedulers();
   } else {

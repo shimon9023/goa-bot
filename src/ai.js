@@ -22,11 +22,12 @@ const PRICE_PER_MILLION = { input: 2, output: 10 };
 
 // --- רישום הוצאה ---
 
-async function recordSpend({ kind, inputTokens = 0, outputTokens = 0, images = 0 }) {
+async function recordSpend({ kind, inputTokens = 0, outputTokens = 0, images = 0, searches = 0 }) {
   const cost =
     (inputTokens / 1_000_000) * PRICE_PER_MILLION.input +
     (outputTokens / 1_000_000) * PRICE_PER_MILLION.output +
-    images * 0.04;
+    images * 0.04 +
+    searches * 0.01;
 
   try {
     await supabase.from('bot_ai_spend').insert({
@@ -34,6 +35,7 @@ async function recordSpend({ kind, inputTokens = 0, outputTokens = 0, images = 0
       input_tokens: inputTokens,
       output_tokens: outputTokens,
       images,
+      searches,
       cost_usd: Number(cost.toFixed(4)),
     });
   } catch (error) {
@@ -72,47 +74,76 @@ export async function assertWithinBudget(settings) {
 
 // --- Claude ---
 
-async function callClaude({ system, messages, maxTokens = 2000 }) {
+// כלי החיפוש של Anthropic. רץ בצד שלהם, בלי שירות נוסף ובלי מפתח נוסף.
+const WEB_SEARCH_TOOL = {
+  type: process.env.WEB_SEARCH_TOOL_VERSION || 'web_search_20250305',
+  name: 'web_search',
+  max_uses: 4,
+};
+
+async function callClaude({ system, messages, maxTokens = 2000, webSearch = false }) {
   if (!config.ai.anthropicKey) {
     throw new Error('חסר מפתח של Anthropic. הוסף ANTHROPIC_API_KEY בהגדרות השרת.');
   }
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': config.ai.anthropicKey,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: CLAUDE_MODEL,
-      max_tokens: maxTokens,
-      system,
-      messages,
-    }),
-  });
+  const body = {
+    model: CLAUDE_MODEL,
+    max_tokens: maxTokens,
+    system,
+    messages,
+  };
 
-  const data = await response.json().catch(() => ({}));
+  if (webSearch) body.tools = [WEB_SEARCH_TOOL];
+
+  const send = (payload) =>
+    fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': config.ai.anthropicKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+  let response = await send(body);
+  let data = await response.json().catch(() => ({}));
+
+  // אם כלי החיפוש לא זמין, מנסים שוב בלעדיו במקום להיכשל
+  if (!response.ok && webSearch) {
+    console.error('חיפוש באינטרנט לא זמין, ממשיך בלעדיו:', data?.error?.message);
+    delete body.tools;
+    response = await send(body);
+    data = await response.json().catch(() => ({}));
+  }
 
   if (!response.ok) {
     throw new Error(`Claude: ${data?.error?.message || response.status}`);
   }
 
+  const searches = (data.usage?.server_tool_use?.web_search_requests) || 0;
+
   await recordSpend({
-    kind: 'claude',
+    kind: webSearch ? 'claude+search' : 'claude',
     inputTokens: data.usage?.input_tokens || 0,
     outputTokens: data.usage?.output_tokens || 0,
+    searches,
   });
 
-  return (data.content || []).map((block) => block.text || '').join('').trim();
+  return (data.content || [])
+    .filter((block) => block.type === 'text')
+    .map((block) => block.text || '')
+    .join('')
+    .trim();
 }
 
 // מבקש מקלוד תשובה בפורמט JSON ומנקה עטיפות קוד אם הן חזרו
-async function callClaudeJson({ system, messages, maxTokens = 2000 }) {
+async function callClaudeJson({ system, messages, maxTokens = 2000, webSearch = false }) {
   const raw = await callClaude({
     system: `${system}\n\nהחזר JSON תקין בלבד, בלי טקסט לפניו או אחריו.`,
     messages,
     maxTokens,
+    webSearch,
   });
 
   const cleaned = raw
@@ -180,12 +211,17 @@ ${tags.map((t) => `- ${t.name}`).join('\n')}
   "priceFromUser": null,
   "productKind": "סוג המוצר במילה או שתיים, למשל חד פעמי, גחלים, נוזל סולט",
   "isBulk": false,
-  "notes": "דברים שלא היית בטוח לגביהם"
+  "notes": ["עד שלוש הערות קצרות"]
 }
 
 אם שמעון אמר מחיר, שים אותו ב-priceFromUser כמספר. אם לא אמר, השאר null.
 isBulk הוא true רק אם זה פריט שנקנה בכמות, כמו פאקט ניירות, פילטרים או שקיות ניקוטין.
-אל תכתוב מטא כאן. המטא נכתב בשלב נפרד.`,
+אל תכתוב מטא כאן. המטא נכתב בשלב נפרד.
+
+notes: לכל היותר שלוש הערות, כל אחת משפט קצר.
+רק דברים שחוסמים את שמעון או שהוא חייב להחליט עליהם.
+לא לרשום מה בחרת ולמה, ולא לחזור על כללי הכתיבה.
+אם אין מה להגיד, החזר רשימה ריקה.`,
       },
     ],
   });
@@ -312,6 +348,66 @@ export async function describeProductImage(imageUrl) {
       },
     ],
   });
+}
+
+// קורא את כל התמונות יחד ומחזיר גם תיאור כללי וגם מה שכתוב על כל אחת.
+// זה מה שמאפשר לזהות מוצר עם וריאציות: 11 תמונות של 11 טעמים.
+export async function describeProductImages(imageUrls) {
+  const urls = imageUrls.slice(0, 14);
+
+  const blocks = [];
+  for (const [index, url] of urls.entries()) {
+    blocks.push({ type: 'text', text: `תמונה ${index + 1}:` });
+    blocks.push(await imageBlock(url));
+  }
+
+  blocks.push({
+    type: 'text',
+    text: `קיבלת ${urls.length} תמונות.
+
+החזר JSON:
+{
+  "overall": "תיאור המוצר המשותף לכל התמונות",
+  "brand": "המותג כפי שכתוב, או null",
+  "model": "שם הדגם כפי שכתוב, או null",
+  "perImage": [
+    { "index": 1, "label": "מה שכתוב על התמונה הזו שמבדיל אותה, למשל הטעם או הצבע", "certain": true }
+  ],
+  "looksLikeVariants": true,
+  "variantAttribute": "איך לקרוא למה שמבדיל ביניהן, למשל טעם או צבע או מידה"
+}
+
+looksLikeVariants הוא true רק אם אלה אותו מוצר בגרסאות שונות.
+אם כל התמונות הן אותו פריט מזוויות שונות, זה false.
+label הוא הטקסט כפי שהוא מופיע, בלי לתרגם ובלי להמציא.
+אם אי אפשר לקרוא, שים null ו-certain false.`,
+  });
+
+  return callClaudeJson({
+    system: VISION_RULES,
+    maxTokens: 2500,
+    messages: [{ role: 'user', content: blocks }],
+  });
+}
+
+// מחפש באינטרנט מידע על מוצר, כדי למלא מה שלא נראה בתמונה
+export async function researchProduct(name, hints = '') {
+  try {
+    return await callClaude({
+      system: `אתה אוסף מידע עובדתי על מוצר עישון או אידוי, לצורך כתיבת עמוד מוצר בחנות ישראלית.
+חפש באינטרנט ותחזיר רק עובדות שמצאת, בלי לנחש.
+אם לא מצאת משהו, תגיד שלא מצאת אותו.
+מה שמעניין: מספר שאיפות, נפח, סוג המכשיר, רשימת טעמים, מאפיינים בולטים.
+אל תביא מחירים, הם לא רלוונטיים.
+תשובה קצרה, עד עשר שורות.`,
+      maxTokens: 1200,
+      webSearch: true,
+      messages: [{ role: 'user', content: `המוצר: ${name}\n${hints}` }],
+    });
+  } catch (error) {
+    console.error('מחקר המוצר נכשל:', error.message);
+    return '';
+  }
 }
 
 // קריאת צילום מדף לעדכון מלאי
