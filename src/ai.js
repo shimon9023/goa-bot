@@ -81,7 +81,7 @@ const WEB_SEARCH_TOOL = {
   max_uses: 4,
 };
 
-async function callClaude({ system, messages, maxTokens = 2000, webSearch = false }) {
+async function callClaude({ system, messages, maxTokens = 2000, webSearch = false, withMeta = false }) {
   if (!config.ai.anthropicKey) {
     throw new Error('חסר מפתח של Anthropic. הוסף ANTHROPIC_API_KEY בהגדרות השרת.');
   }
@@ -130,23 +130,19 @@ async function callClaude({ system, messages, maxTokens = 2000, webSearch = fals
     searches,
   });
 
-  return (data.content || [])
+  const text = (data.content || [])
     .filter((block) => block.type === 'text')
     .map((block) => block.text || '')
     .join('')
     .trim();
+
+  // stop_reason חושף אם התשובה נקטעה באמצע בגלל תקרת טקסט
+  return withMeta ? { text, stopReason: data.stop_reason || '' } : text;
 }
 
-// מבקש מקלוד תשובה בפורמט JSON ומנקה עטיפות קוד אם הן חזרו
-async function callClaudeJson({ system, messages, maxTokens = 2000, webSearch = false }) {
-  const raw = await callClaude({
-    system: `${system}\n\nהחזר JSON תקין בלבד, בלי טקסט לפניו או אחריו.`,
-    messages,
-    maxTokens,
-    webSearch,
-  });
-
-  const cleaned = raw
+// מנסה לחלץ JSON מתוך טקסט, גם אם קלוד עטף אותו או הוסיף משפט לפניו
+function parseJsonLoose(raw) {
+  const cleaned = String(raw || '')
     .replace(/^```(?:json)?\s*/i, '')
     .replace(/```\s*$/, '')
     .trim();
@@ -154,10 +150,65 @@ async function callClaudeJson({ system, messages, maxTokens = 2000, webSearch = 
   try {
     return JSON.parse(cleaned);
   } catch {
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    if (match) return JSON.parse(match[0]);
-    throw new Error('לא הצלחתי לקרוא את התשובה של קלוד.');
+    // לפעמים יש משפט לפני או אחרי. לוקחים את הסוגריים החיצוניים ביותר.
+    const candidates = [cleaned.match(/\{[\s\S]*\}/), cleaned.match(/\[[\s\S]*\]/)];
+    for (const match of candidates) {
+      if (!match) continue;
+      try {
+        return JSON.parse(match[0]);
+      } catch {
+        // ממשיכים לנסות
+      }
+    }
+    return null;
   }
+}
+
+// מבקש מקלוד תשובה בפורמט JSON ומנקה עטיפות קוד אם הן חזרו
+async function callClaudeJson({ system, messages, maxTokens = 2000, webSearch = false, label = 'JSON' }) {
+  const jsonSystem = `${system}\n\nהחזר JSON תקין בלבד, בלי טקסט לפניו או אחריו, בלי עטיפת קוד ובלי הסברים.`;
+
+  const first = await callClaude({
+    system: jsonSystem,
+    messages,
+    maxTokens,
+    webSearch,
+    withMeta: true,
+  });
+
+  const parsed = parseJsonLoose(first.text);
+  if (parsed) return parsed;
+
+  // נכשל. רושמים בלוג מה באמת חזר, כדי שלא נעבוד בעיוורון.
+  const truncated = first.stopReason === 'max_tokens';
+  console.error(
+    `פענוח ${label} נכשל. stop_reason=${first.stopReason || 'לא ידוע'}, אורך=${first.text.length}. תחילת התשובה: ${first.text.slice(0, 400)}`,
+  );
+
+  // ניסיון שני, פעם אחת בלבד. אם נקטע, נותנים יותר מקום.
+  const retry = await callClaude({
+    system: `${jsonSystem}\n\nהניסיון הקודם לא היה JSON תקין. החזר הפעם אך ורק את אובייקט ה-JSON, מהתו הראשון ועד האחרון.`,
+    messages,
+    maxTokens: truncated ? Math.min(maxTokens * 2, 8000) : maxTokens,
+    webSearch: false,
+    withMeta: true,
+  });
+
+  const retryParsed = parseJsonLoose(retry.text);
+  if (retryParsed) {
+    console.error(`פענוח ${label} הצליח בניסיון השני.`);
+    return retryParsed;
+  }
+
+  console.error(
+    `פענוח ${label} נכשל גם בניסיון השני. stop_reason=${retry.stopReason || 'לא ידוע'}. תחילת התשובה: ${retry.text.slice(0, 400)}`,
+  );
+
+  throw new Error(
+    truncated
+      ? 'התשובה של קלוד נקטעה באמצע. נסה שוב, ואם זה חוזר תגיד לי ואני ארחיב את המכסה.'
+      : 'לא הצלחתי לקרוא את התשובה של קלוד. הסיבה רשומה בלוג של השרת.',
+  );
 }
 
 // --- כתיבת תוכן מוצר ---
@@ -194,6 +245,7 @@ ${tags.map((t) => `- ${t.name}`).join('\n')}
   ].filter(Boolean);
 
   return callClaudeJson({
+    label: 'תוכן מוצר',
     system,
     maxTokens: 3000,
     messages: [
@@ -235,6 +287,7 @@ export async function writeMeta({ name, description, price, productKind, isBulk 
     : 'אין מחיר. כתוב את הכותרת בלי מחיר, וציין בהערות שחסר מחיר.';
 
   return callClaudeJson({
+    label: 'מטא',
     system: META_RULES,
     maxTokens: 1200,
     messages: [
@@ -266,6 +319,7 @@ titleLength ו-descriptionLength הם ספירת התווים בפועל. ודא
 // תיקון תוכן לפי הערה חופשית
 export async function reviseProductContent(current, instruction) {
   return callClaudeJson({
+    label: 'תיקון תוכן',
     system: DESCRIPTION_RULES,
     maxTokens: 3000,
     messages: [
@@ -384,6 +438,7 @@ label הוא הטקסט כפי שהוא מופיע, בלי לתרגם ובלי �
   });
 
   return callClaudeJson({
+    label: 'ניתוח תמונות',
     system: VISION_RULES,
     maxTokens: 2500,
     messages: [{ role: 'user', content: blocks }],
@@ -420,6 +475,7 @@ ${knownProducts.map((p) => `- ${p.name}`).join('\n')}
 התאם כל מוצר שאתה מזהה לשם מהרשימה. אם אין התאמה טובה, סמן כלא ודאי.`;
 
   return callClaudeJson({
+    label: 'צילום מדף',
     system,
     maxTokens: 2000,
     messages: [
@@ -449,6 +505,7 @@ ${knownProducts.map((p) => `- ${p.name}`).join('\n')}
 התאם כל פריט לשם מהרשימה. אם אין התאמה ברורה, סמן כלא ודאי.`;
 
   return callClaudeJson({
+    label: 'רשימת מלאי',
     system,
     maxTokens: 1500,
     messages: [
@@ -580,10 +637,34 @@ export async function generateProductImage(imageUrl, { kind = 'product', clothin
 
   await recordSpend({ kind: 'image', images: 1 });
 
-  const part = (data.candidates?.[0]?.content?.parts || []).find((p) => p.inline_data || p.inlineData);
+  const candidate = data.candidates?.[0];
+  const parts = candidate?.content?.parts || [];
+  const part = parts.find((p) => p.inline_data || p.inlineData);
   const inline = part?.inline_data || part?.inlineData;
 
-  if (!inline?.data) throw new Error('Gemini לא החזיר תמונה.');
+  if (!inline?.data) {
+    // ג'מיני החזיר תשובה, אבל בלי תמונה. הסיבה נמצאת באחד השדות האלה.
+    const finishReason = candidate?.finishReason || '';
+    const blockReason = data.promptFeedback?.blockReason || '';
+    const spokenText = parts
+      .map((p) => p.text || '')
+      .join(' ')
+      .trim();
+
+    console.error(
+      `ג'מיני לא החזיר תמונה. finishReason=${finishReason || 'אין'}, blockReason=${blockReason || 'אין'}, טקסט=${spokenText.slice(0, 300) || 'אין'}, מספר חלקים=${parts.length}`,
+    );
+
+    const reason = [
+      blockReason && `חסימה: ${blockReason}`,
+      finishReason && finishReason !== 'STOP' && `סיום: ${finishReason}`,
+      spokenText && `ג'מיני כתב: ${spokenText.slice(0, 200)}`,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+
+    throw new Error(reason ? `ג'מיני לא החזיר תמונה. ${reason}` : "ג'מיני החזיר תשובה ריקה, בלי תמונה ובלי סיבה.");
+  }
 
   return {
     buffer: Buffer.from(inline.data, 'base64'),
@@ -614,6 +695,7 @@ export async function saveImageFeedback({ productName, beforeUrl, note, afterUrl
 // בלי זה החיפוש מקבל את כל המשפט ונכשל.
 export async function extractProductPhrase(text) {
   const result = await callClaudeJson({
+    label: 'שם מוצר',
     system: `אתה מוציא שם מוצר מתוך בקשה בעברית חופשית לחנות מוצרי עישון.
 החזר רק את המילים שהן שם המוצר, בלי פעלים ובלי מילות קישור.
 דוגמאות:
@@ -658,6 +740,7 @@ ${products.length ? products.map((p) => `- ${p.name} (מזהה ${p.id})`).join('
 - confidence הוא מספר בין 0 ל-1.`;
 
   return callClaudeJson({
+    label: 'כוונה',
     system,
     maxTokens: 800,
     messages: [
