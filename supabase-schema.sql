@@ -80,11 +80,15 @@ create table if not exists bot_ai_spend (
   input_tokens   integer not null default 0,
   output_tokens  integer not null default 0,
   images         integer not null default 0,
+  searches       integer not null default 0,
   cost_usd       numeric(10,4) not null default 0,
   created_at     timestamptz not null default now()
 );
 
 create index if not exists bot_ai_spend_date_idx on bot_ai_spend (created_at desc);
+
+-- למי שכבר הריץ את הסכמה קודם
+alter table bot_ai_spend add column if not exists searches integer not null default 0;
 
 -- טיוטות מוצר שנמצאות באמצע עריכה
 create table if not exists bot_product_drafts (
