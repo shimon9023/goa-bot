@@ -51,6 +51,64 @@ export function searchProducts(term, limit = 10) {
   });
 }
 
+// מילים שלא עוזרות לחיפוש ורק מקלקלות אותו
+const NOISE = new Set([
+  'בחר', 'בחרו', 'כמות', 'וגודל', 'גודל', 'מידה', 'מידות', 'צבע', 'צבעים',
+  'דגם', 'סוג', 'סוגים', 'טעם', 'טעמים', 'אפשרויות', 'מבחר', 'של', 'את',
+  'עם', 'ל', 'לי', 'מוצר', 'המוצר', 'זה',
+]);
+
+function normalize(text) {
+  return String(text)
+    // מקפים מכל הסוגים, גרשיים ונקודתיים הופכים לרווח
+    .replace(/[‐-―−–—-]/g, ' ')
+    .replace(/["'״׳,.:;!?()\[\]|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function words(text) {
+  return normalize(text).split(' ').filter((w) => w.length > 1 && !NOISE.has(w));
+}
+
+// חיפוש שמוותר בהדרגה: קודם הביטוי המלא, ואז פחות ופחות מילים.
+// מחזיר גם את מה שבאמת חיפשנו, כדי שאפשר יהיה להגיד לשמעון.
+export async function findProducts(rawTerm, limit = 8) {
+  const clean = normalize(rawTerm);
+  const parts = words(rawTerm);
+
+  const attempts = [];
+  const add = (t) => { if (t && !attempts.includes(t)) attempts.push(t); };
+
+  add(clean);
+
+  // קודם חלונות שמסתיימים בסוף המשפט, מהארוך לקצר.
+  // בעברית שם המוצר בא בדרך כלל בסוף:
+  // "תוריד את המלאי למוצר קלאוד קלאסי" -> "קלאוד קלאסי"
+  for (let len = parts.length; len >= 1; len -= 1) {
+    add(parts.slice(parts.length - len).join(' '));
+  }
+
+  // ורק אחר כך חלונות שמתחילים מההתחלה, למקרה שהשם דווקא שם
+  for (let len = parts.length - 1; len >= 1; len -= 1) {
+    if (attempts.length >= 9) break;
+    add(parts.slice(0, len).join(' '));
+  }
+
+  for (const [index, term] of attempts.entries()) {
+    try {
+      const results = await searchProducts(term, limit);
+      if (results.length) {
+        return { results, usedTerm: term, exact: index === 0, attempts: index + 1 };
+      }
+    } catch (error) {
+      console.error(`חיפוש "${term}" נכשל:`, error.message);
+    }
+  }
+
+  return { results: [], usedTerm: clean, exact: false, attempts: attempts.length };
+}
+
 export function getProduct(id) {
   return request(`/products/${id}`);
 }

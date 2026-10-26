@@ -222,11 +222,12 @@ async function handleTextInput(chatId, userId, text) {
       return;
     }
 
-    await inventory.applyStockChange(chatId, userId, {
-      productId: state.productId,
-      variationId: state.variationId,
-      quantity,
-    });
+    await inventory.applyStockChange(
+      chatId,
+      userId,
+      { productId: state.productId, variationId: state.variationId, quantity },
+      state.cardMessageId || null
+    );
     return;
   }
 
@@ -273,6 +274,7 @@ async function handleCallback(query) {
 
   if (scope === 'ft') {
     if (action === 'yes') await freetext.confirm(chatId, userId);
+    else if (action === 'pick') await freetext.pickProduct(chatId, userId, rest[0]);
     else await freetext.cancel(chatId, userId);
     return;
   }
@@ -306,42 +308,56 @@ async function handleCallback(query) {
 
     case 'instock':
     case 'outofstock':
-      await inventory.applyStockChange(chatId, userId, {
-        productId: Number(rest[0]),
-        variationId: rest[1] ? Number(rest[1]) : undefined,
-        inStock: action === 'instock',
-      });
+      await inventory.applyStockChange(
+        chatId,
+        userId,
+        {
+          productId: Number(rest[0]),
+          variationId: rest[1] ? Number(rest[1]) : undefined,
+          inStock: action === 'instock',
+        },
+        messageId
+      );
       break;
 
-    case 'setqty':
+    case 'setqty': {
+      const state = await db.getState(userId);
       await db.setState(userId, {
+        ...state,
         module: 'inventory',
         awaiting: 'quantity',
         productId: Number(rest[0]),
         variationId: rest[1] ? Number(rest[1]) : undefined,
+        cardMessageId: messageId,
       });
       await sendMessage(chatId, 'כמה יחידות?');
       break;
+    }
 
+    // inv:manage:on:PID  או  inv:manage:on:PID:VID
     case 'manage':
-      await inventory.applyStockChange(chatId, userId, {
-        productId: Number(rest[1]),
-        manage: rest[0] === 'on',
-      });
+      await inventory.applyStockChange(
+        chatId,
+        userId,
+        {
+          productId: Number(rest[1]),
+          variationId: rest[2] ? Number(rest[2]) : undefined,
+          manage: rest[0] === 'on',
+        },
+        messageId
+      );
       break;
 
     case 'share':
-      await inventory.applyStockChange(chatId, userId, {
-        productId: Number(rest[0]),
-        manage: true,
-      });
+      await inventory.applyStockChange(
+        chatId, userId, { productId: Number(rest[0]), manage: true }, messageId
+      );
       break;
 
     case 'split':
-      await inventory.applyStockChange(chatId, userId, {
-        productId: Number(rest[0]),
-        manage: false,
-      });
+      await inventory.applyStockChange(
+        chatId, userId, { productId: Number(rest[0]), manage: false }, messageId
+      );
       break;
 
     case 'bulk':

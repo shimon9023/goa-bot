@@ -17,10 +17,20 @@ export async function handle(chatId, userId, text) {
   const settings = await db.getSettings();
   await ai.assertWithinBudget(settings);
 
-  // מביאים מועמדים מהחנות כדי שקלוד יבחר מתוך שמות אמיתיים
+  // מוציאים קודם את שם המוצר מהמשפט, ורק אז מחפשים בחנות.
+  // חיפוש של המשפט המלא בווקומרס תמיד נכשל.
   let candidates = [];
+  let phrase = null;
+
   try {
-    candidates = (await woo.searchProducts(text, 8)).map((p) => ({ id: p.id, name: p.name }));
+    phrase = await ai.extractProductPhrase(text);
+  } catch (error) {
+    console.error('זיהוי שם המוצר נכשל:', error.message);
+  }
+
+  try {
+    const { results } = await woo.findProducts(phrase || text, 8);
+    candidates = results.map((p) => ({ id: p.id, name: p.name }));
   } catch (error) {
     console.error('חיפוש מוצרים נכשל:', error.message);
   }
@@ -80,9 +90,33 @@ export async function handle(chatId, userId, text) {
   if (!NEEDS_CONFIRMATION.has(intent.action)) return;
 
   if (!intent.productId) {
+    // יש מועמדים אבל קלוד לא בחר אחד, אז נותנים לשמעון לבחור
+    if (candidates.length) {
+      const state = await db.getState(userId);
+      await db.setState(userId, { ...state, module: 'freetext', pendingIntent: intent });
+
+      await sendMessage(
+        chatId,
+        `לא הייתי בטוח לאיזה מוצר התכוונת. אחד מאלה?`,
+        {
+          reply_markup: inlineKeyboard([
+            ...candidates.slice(0, 6).map((p) => [button(p.name, `ft:pick:${p.id}`)]),
+            [button('אף אחד', 'ft:no')],
+          ]),
+        }
+      );
+      return;
+    }
+
     await sendMessage(
       chatId,
-      'לא זיהיתי לאיזה מוצר הכוונה. אפשר לכתוב את השם המדויק?',
+      [
+        phrase
+          ? `לא מצאתי בחנות מוצר שמתאים ל"${phrase}".`
+          : 'לא זיהיתי על איזה מוצר מדובר.',
+        '',
+        'אפשר לכתוב את השם כמו שהוא מופיע באתר, או חלק ממנו.',
+      ].join('\n'),
       { reply_markup: mainKeyboard }
     );
     return;
@@ -130,6 +164,43 @@ export async function confirm(chatId, userId) {
   else if (intent.action === 'stock_qty') change.quantity = intent.quantity;
 
   await inventory.applyStockChange(chatId, userId, change);
+}
+
+// שמעון בחר מוצר מתוך הרשימה שהצענו
+export async function pickProduct(chatId, userId, productId) {
+  const state = await db.getState(userId);
+  const intent = state?.pendingIntent;
+
+  if (!intent) {
+    await inventory.showProduct(chatId, userId, Number(productId));
+    return;
+  }
+
+  const updated = { ...intent, productId: Number(productId) };
+
+  // פעולת קריאה בלבד, אין מה לאשר
+  if (!NEEDS_CONFIRMATION.has(intent.action)) {
+    await db.clearState(userId);
+    await inventory.showProduct(chatId, userId, Number(productId));
+    return;
+  }
+
+  await db.setState(userId, { ...state, pendingIntent: updated });
+
+  const product = await woo.getProduct(productId).catch(() => null);
+  const label = product?.name || 'המוצר';
+
+  const verb = {
+    stock_in: 'לסמן כזמין במלאי',
+    stock_out: 'לסמן כאזל',
+    stock_qty: `לקבוע כמות ${intent.quantity}`,
+  }[intent.action];
+
+  await sendMessage(chatId, `<b>${label}</b>\n\n${verb}. לבצע?`, {
+    reply_markup: inlineKeyboard([
+      [button('כן, בצע', 'ft:yes'), button('לא', 'ft:no')],
+    ]),
+  });
 }
 
 export async function cancel(chatId, userId) {

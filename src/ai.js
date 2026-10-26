@@ -514,6 +514,31 @@ export async function saveImageFeedback({ productName, beforeUrl, note, afterUrl
 // כל הודעה שאינה כפתור עוברת כאן. קלוד מחזיר מה הוא הבין,
 // והבוט מציג את זה לאישור לפני שהוא נוגע באתר.
 
+// שלב ראשון: מוציאים מהמשפט את שם המוצר בלבד, לפני שמחפשים בחנות.
+// בלי זה החיפוש מקבל את כל המשפט ונכשל.
+export async function extractProductPhrase(text) {
+  const result = await callClaudeJson({
+    system: `אתה מוציא שם מוצר מתוך בקשה בעברית חופשית לחנות מוצרי עישון.
+החזר רק את המילים שהן שם המוצר, בלי פעלים ובלי מילות קישור.
+דוגמאות:
+"תוריד את המלאי למוצר קלאוד קלאסי" -> "קלאוד קלאסי"
+"תראה לי מה המצב של גיזה כחולה" -> "גיזה כחולה"
+"פילטרים לגלגול - בחר כמות וגודל" -> "פילטרים לגלגול"
+"כמה הזמנות יש היום" -> null`,
+    maxTokens: 300,
+    messages: [
+      {
+        role: 'user',
+        content: `הבקשה: ${text}
+
+החזר JSON: { "productPhrase": "שם המוצר או null" }`,
+      },
+    ],
+  });
+
+  return result.productPhrase || null;
+}
+
 export async function readIntent(text, { products = [], recentOrders = [] } = {}) {
   const system = `אתה מתרגם בקשות בעברית חופשית לפעולות בחנות של GOA.
 

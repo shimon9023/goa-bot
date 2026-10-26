@@ -1,4 +1,5 @@
 // מודול ניהול מלאי: חיפוש מוצר, הצגת מצב, עדכון, וריאציות ומלאי משותף.
+// כרטיס המוצר מתעדכן במקום, בלי להציף את השיחה בכרטיסים חדשים.
 
 import * as woo from './woo.js';
 import * as db from './db.js';
@@ -16,11 +17,14 @@ function stockLine(item) {
   const inStock = item.stock_status === 'instock';
   const mark = inStock ? '🟢 במלאי' : '🔴 אזל';
 
-  if (item.manage_stock && item.stock_quantity !== null) {
-    return `${mark} · ${item.stock_quantity} יחידות`;
+  if (!item.manage_stock) return `${mark} · הכמות לא מנוהלת`;
+
+  // ניהול כמות פעיל אבל עוד לא הוזנה כמות
+  if (item.stock_quantity === null || item.stock_quantity === undefined) {
+    return `${mark} · ניהול כמות פעיל, לא נקבעה כמות`;
   }
 
-  return `${mark} · הכמות לא מנוהלת`;
+  return `${mark} · ${item.stock_quantity} יחידות`;
 }
 
 function variationName(variation) {
@@ -28,40 +32,69 @@ function variationName(variation) {
   return parts.length ? parts.join(' · ') : `וריאציה ${variation.id}`;
 }
 
-// --- שלב ראשון: המשתמש אמר שם מוצר ---
+// כפתור ניהול הכמות. מופיע בכל מקום: מוצר פשוט, מוצר עם וריאציות, ווריאציה בודדת.
+function manageButton(item, productId, variationId = null) {
+  const suffix = variationId ? `${productId}:${variationId}` : `${productId}`;
+
+  return item.manage_stock
+    ? button('כבה ניהול כמות', `inv:manage:off:${suffix}`)
+    : button('הפעל ניהול כמות', `inv:manage:on:${suffix}`);
+}
+
+// --- חיפוש ---
 
 export async function handleProductSearch(chatId, userId, term) {
-  const results = await woo.searchProducts(term, 8);
+  const { results, usedTerm, exact } = await woo.findProducts(term, 8);
 
   if (!results.length) {
-    await sendMessage(chatId, `לא מצאתי מוצר בשם "${term}". תנסה שם אחר או חלק מהשם.`);
+    await sendMessage(
+      chatId,
+      [
+        `לא מצאתי כלום שמתאים ל"${term}".`,
+        '',
+        'אפשר לנסות חלק מהשם, או שם של מותג.',
+      ].join('\n'),
+      { reply_markup: mainKeyboard }
+    );
     return;
   }
 
-  if (results.length === 1) {
+  // התאמה מדויקת ויחידה, נכנסים ישר
+  if (exact && results.length === 1) {
     await showProduct(chatId, userId, results[0].id);
     return;
   }
 
-  const rows = results.map((product) => [
-    button(product.name, `inv:product:${product.id}`),
-  ]);
+  const rows = results.map((product) => [button(product.name, `inv:product:${product.id}`)]);
 
-  await sendMessage(chatId, `מצאתי ${results.length} מוצרים. איזה מהם?`, {
-    reply_markup: inlineKeyboard(rows),
-  });
+  const header = exact
+    ? `מצאתי ${results.length} מוצרים. איזה מהם?`
+    : [
+        `לא מצאתי מוצר בשם המדויק "${term}".`,
+        `חיפשתי "${usedTerm}" ואלה המוצרים הקרובים:`,
+        '',
+        'אם אף אחד לא מתאים, תכתוב שם אחר.',
+      ].join('\n');
+
+  await sendMessage(chatId, header, { reply_markup: inlineKeyboard(rows) });
 }
 
-// --- הצגת מוצר ומצבו ---
+// --- הצגת מוצר ---
 
 export async function showProduct(chatId, userId, productId, messageId = null) {
   const product = await woo.getProduct(productId);
 
-  await db.setState(userId, { module: 'inventory', productId });
+  const state = (await db.getState(userId)) || {};
+  await db.setState(userId, {
+    ...state,
+    module: 'inventory',
+    productId,
+    variationId: null,
+    cardMessageId: messageId || state.cardMessageId || null,
+  });
 
   if (product.type === 'variable') {
-    await showVariableProduct(chatId, product, messageId);
-    return;
+    return showVariableProduct(chatId, userId, product, messageId);
   }
 
   const text = [`<b>${product.name}</b>`, stockLine(product)].join('\n');
@@ -72,41 +105,31 @@ export async function showProduct(chatId, userId, productId, messageId = null) {
       button('סמן אזל', `inv:outofstock:${product.id}`),
     ],
     [button('שנה כמות', `inv:setqty:${product.id}`)],
-    [
-      product.manage_stock
-        ? button('כבה ניהול כמות', `inv:manage:off:${product.id}`)
-        : button('הפעל ניהול כמות', `inv:manage:on:${product.id}`),
-    ],
+    [manageButton(product, product.id)],
   ];
 
-  const payload = { reply_markup: inlineKeyboard(rows) };
-
-  if (messageId) {
-    await editMessageText(chatId, messageId, text, payload);
-  } else {
-    await sendMessage(chatId, text, payload);
-  }
+  return render(chatId, userId, text, inlineKeyboard(rows), messageId);
 }
 
-async function showVariableProduct(chatId, product, messageId) {
+async function showVariableProduct(chatId, userId, product, messageId) {
   const variations = await woo.getVariations(product.id);
+
+  // כשהמלאי מנוהל ברמת המוצר הראשי, כל הווריאציות חולקות אותו
+  const sharedStock = product.manage_stock;
 
   const lines = [`<b>${product.name}</b>`, ''];
   const rows = [];
 
-  // אם המלאי מנוהל ברמת המוצר הראשי, כל הווריאציות חולקות אותו
-  const sharedStock = product.manage_stock;
-
   if (sharedStock) {
     lines.push('מלאי משותף לכל הווריאציות');
     lines.push(stockLine(product));
-    lines.push('');
 
     rows.push([
       button('סמן במלאי', `inv:instock:${product.id}`),
       button('סמן אזל', `inv:outofstock:${product.id}`),
     ]);
     rows.push([button('שנה כמות', `inv:setqty:${product.id}`)]);
+    rows.push([manageButton(product, product.id)]);
     rows.push([button('מלאי נפרד לכל וריאציה', `inv:split:${product.id}`)]);
   } else {
     for (const variation of variations) {
@@ -115,40 +138,31 @@ async function showVariableProduct(chatId, product, messageId) {
       lines.push('');
 
       rows.push([
-        button(
-          `${variationName(variation)} · עדכן`,
-          `inv:var:${product.id}:${variation.id}`
-        ),
+        button(variationName(variation), `inv:var:${product.id}:${variation.id}`),
       ]);
     }
 
     rows.push([button('מלאי משותף לכל הווריאציות', `inv:share:${product.id}`)]);
   }
 
-  const payload = { reply_markup: inlineKeyboard(rows) };
-  const text = lines.join('\n').trim();
-
-  if (messageId) {
-    await editMessageText(chatId, messageId, text, payload);
-  } else {
-    await sendMessage(chatId, text, payload);
-  }
+  return render(chatId, userId, lines.join('\n').trim(), inlineKeyboard(rows), messageId);
 }
 
-// --- הצגת וריאציה בודדת ---
-
 export async function showVariation(chatId, userId, productId, variationId, messageId) {
-  const [product, variation] = await Promise.all([
+  const [product, variations] = await Promise.all([
     woo.getProduct(productId),
-    woo.getVariations(productId).then((list) => list.find((v) => v.id === variationId)),
+    woo.getVariations(productId),
   ]);
+
+  const variation = variations.find((v) => v.id === variationId);
 
   if (!variation) {
     await sendMessage(chatId, 'לא מצאתי את הווריאציה הזו. אולי היא נמחקה.');
-    return;
+    return null;
   }
 
-  await db.setState(userId, { module: 'inventory', productId, variationId });
+  const state = (await db.getState(userId)) || {};
+  await db.setState(userId, { ...state, module: 'inventory', productId, variationId });
 
   const text = [
     `<b>${product.name}</b>`,
@@ -162,15 +176,35 @@ export async function showVariation(chatId, userId, productId, variationId, mess
       button('סמן אזל', `inv:outofstock:${productId}:${variationId}`),
     ],
     [button('שנה כמות', `inv:setqty:${productId}:${variationId}`)],
+    [manageButton(variation, productId, variationId)],
     [button('חזרה לכל הווריאציות', `inv:product:${productId}`)],
   ];
 
-  await editMessageText(chatId, messageId, text, { reply_markup: inlineKeyboard(rows) });
+  return render(chatId, userId, text, inlineKeyboard(rows), messageId);
+}
+
+// מעדכן את הכרטיס הקיים, ורק אם אין כזה שולח חדש
+async function render(chatId, userId, text, markup, messageId) {
+  if (messageId) {
+    await editMessageText(chatId, messageId, text, { reply_markup: markup });
+    return messageId;
+  }
+
+  const sent = await sendMessage(chatId, text, { reply_markup: markup });
+  const state = (await db.getState(userId)) || {};
+  await db.setState(userId, { ...state, cardMessageId: sent.message_id });
+
+  return sent.message_id;
 }
 
 // --- ביצוע עדכון ---
 
-export async function applyStockChange(chatId, userId, { productId, variationId, inStock, quantity, manage }) {
+export async function applyStockChange(
+  chatId,
+  userId,
+  { productId, variationId, inStock, quantity, manage },
+  messageId = null
+) {
   const isVariation = Boolean(variationId);
 
   const before = isVariation
@@ -187,18 +221,29 @@ export async function applyStockChange(chatId, userId, { productId, variationId,
     action: 'stock_update',
     target: isVariation ? `${productId}:${variationId}` : String(productId),
     before: {
-      stock_status: before.stock_status,
-      stock_quantity: before.stock_quantity,
-      manage_stock: before.manage_stock,
+      stock_status: before?.stock_status,
+      stock_quantity: before?.stock_quantity,
+      manage_stock: before?.manage_stock,
     },
-    after: { stock_status: inStock === undefined ? undefined : inStock ? 'instock' : 'outofstock', stock_quantity: quantity, manage_stock: manage },
+    after: {
+      stock_status: inStock === undefined ? undefined : inStock ? 'instock' : 'outofstock',
+      stock_quantity: quantity,
+      manage_stock: manage,
+    },
   });
 
-  await sendMessage(chatId, 'עודכן.', { reply_markup: mainKeyboard });
-  await showProduct(chatId, userId, productId);
+  // מציירים מחדש את אותו כרטיס, בלי הודעה נוספת
+  const state = (await db.getState(userId)) || {};
+  const card = messageId || state.cardMessageId || null;
+
+  if (isVariation) {
+    await showVariation(chatId, userId, productId, variationId, card);
+  } else {
+    await showProduct(chatId, userId, productId, card);
+  }
 }
 
-// --- עדכון מרובה: טבלת שינויים ואישור ---
+// --- עדכון מרובה ---
 
 export function buildChangeTable(changes) {
   const lines = ['<b>השינויים שעומדים להתבצע</b>', ''];
@@ -208,14 +253,13 @@ export function buildChangeTable(changes) {
     lines.push(`${change.name} · ${change.quantity} יחידות${uncertain}`);
   }
 
-  lines.push('');
-  lines.push('לאשר?');
-
+  lines.push('', 'לאשר?');
   return lines.join('\n');
 }
 
 export async function proposeBulkChanges(chatId, userId, changes) {
-  await db.setState(userId, { module: 'inventory', pendingBulk: changes });
+  const state = (await db.getState(userId)) || {};
+  await db.setState(userId, { ...state, module: 'inventory', pendingBulk: changes });
 
   await sendMessage(chatId, buildChangeTable(changes), {
     reply_markup: inlineKeyboard([
@@ -258,9 +302,11 @@ export async function applyBulkChanges(chatId, userId) {
 
   await db.clearState(userId);
 
-  const summary = failed.length
-    ? `עודכנו ${done} מוצרים. ${failed.length} נכשלו:\n${failed.join('\n')}`
-    : `עודכנו ${done} מוצרים.`;
-
-  await sendMessage(chatId, summary, { reply_markup: mainKeyboard });
+  await sendMessage(
+    chatId,
+    failed.length
+      ? `עודכנו ${done} מוצרים. ${failed.length} נכשלו:\n${failed.join('\n')}`
+      : `עודכנו ${done} מוצרים.`,
+    { reply_markup: mainKeyboard }
+  );
 }
