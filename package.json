@@ -1,0 +1,20 @@
+{
+  "name": "goa-telegram-bot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Telegram admin bot for the GOA WooCommerce store",
+  "type": "module",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "set-webhook": "node scripts/set-webhook.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "express": "^4.19.2",
+    "node-cron": "^4.6.0"
+  }
+}
