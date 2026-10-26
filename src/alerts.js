@@ -98,7 +98,10 @@ async function checkDuplicates() {
   const settings = await db.getSettings();
   if (!settings.alerts.duplicate) return;
 
-  const since = new Date(Date.now() - settings.duplicateWindowHours * 3600000).toISOString();
+  // סורקים אחורה הרבה יותר מחלון הכפילות עצמו, כדי שהבדיקה תעבוד
+  // גם כשהיא רצה פעם ביום ולא כל שעה.
+  const lookback = Math.max(settings.lookbackHours || 26, settings.duplicateWindowHours);
+  const since = new Date(Date.now() - lookback * 3600000).toISOString();
   const orders = await woo.getOrders({ after: since, per_page: 100 });
 
   const groups = new Map();
@@ -118,31 +121,60 @@ async function checkDuplicates() {
   }
 
   const reported = new Set();
+  const windowMs = settings.duplicateWindowHours * 3600000;
 
   for (const [, list] of groups) {
     if (list.length < 2) continue;
 
-    const signature = list.map((o) => o.id).sort().join('-');
-    if (reported.has(signature)) continue;
-    reported.add(signature);
-
-    const first = list[0];
-    if (await db.isOrderMuted(first.id)) continue;
-    if (await db.wasAlertSent(signature, 'duplicate')) continue;
-
-    const name = `${first.billing?.first_name || ''} ${first.billing?.last_name || ''}`.trim();
-
-    await deliver(
-      [
-        '👀 <b>יכול להיות שזו הזמנה כפולה</b>',
-        '',
-        `${name} ביצע ${list.length} הזמנות בתוך ${settings.duplicateWindowHours} שעות:`,
-        ...list.map((o) => `#${o.number} · ${o.total} ₪`),
-      ].join('\n'),
-      muteButton(first.id)
+    // מחפשים הזמנות שקרובות זו לזו בזמן, ולא רק נמצאות באותה סריקה
+    const sorted = [...list].sort(
+      (a, b) => new Date(a.date_created) - new Date(b.date_created)
     );
 
-    await db.recordAlert(signature, 'duplicate');
+    let cluster = [sorted[0]];
+
+    for (let i = 1; i <= sorted.length; i += 1) {
+      const current = sorted[i];
+      const gap = current
+        ? new Date(current.date_created) - new Date(cluster[cluster.length - 1].date_created)
+        : Infinity;
+
+      if (gap <= windowMs) {
+        cluster.push(current);
+        continue;
+      }
+
+      if (cluster.length >= 2) {
+        const signature = cluster.map((o) => o.id).sort().join('-');
+
+        if (!reported.has(signature)) {
+          reported.add(signature);
+
+          const first = cluster[0];
+          const muted = await db.isOrderMuted(first.id);
+          const already = await db.wasAlertSent(signature, 'duplicate');
+
+          if (!muted && !already) {
+            const name =
+              `${first.billing?.first_name || ''} ${first.billing?.last_name || ''}`.trim();
+
+            await deliver(
+              [
+                '👀 <b>יכול להיות שזו הזמנה כפולה</b>',
+                '',
+                `${name} ביצע ${cluster.length} הזמנות בתוך ${settings.duplicateWindowHours} שעות:`,
+                ...cluster.map((o) => `#${o.number} · ${o.total} ₪`),
+              ].join('\n'),
+              muteButton(first.id)
+            );
+
+            await db.recordAlert(signature, 'duplicate');
+          }
+        }
+      }
+
+      cluster = current ? [current] : [];
+    }
   }
 }
 
@@ -152,8 +184,11 @@ async function checkLargeOrders() {
   const settings = await db.getSettings();
   if (!settings.alerts.largeOrder) return;
 
-  const since = new Date(Date.now() - 2 * 3600000).toISOString();
-  const orders = await woo.getOrders({ after: since, per_page: 50 });
+  // סריקה אחורה של יממה, כדי שהבדיקה תעבוד גם בהרצה יומית.
+  // הרישום בטבלת ההתראות מונע שליחה כפולה על אותה הזמנה.
+  const lookback = settings.lookbackHours || 26;
+  const since = new Date(Date.now() - lookback * 3600000).toISOString();
+  const orders = await woo.getOrders({ after: since, per_page: 100 });
 
   for (const order of orders) {
     if (Number(order.total) < settings.largeOrderAmount) continue;

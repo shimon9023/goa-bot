@@ -26,6 +26,9 @@ export const config = {
   port: Number(optional('PORT', '3000')),
   publicBaseUrl: optional('PUBLIC_BASE_URL').replace(/\/+$/, ''),
 
+  // סוד נפרד לנתיב שמייק קורא לו. אם לא הוגדר, הנתיב סגור.
+  cronSecret: optional('CRON_SECRET'),
+
   telegram: {
     token: required('TELEGRAM_BOT_TOKEN'),
     webhookSecret: required('TELEGRAM_WEBHOOK_SECRET'),
@@ -55,6 +58,8 @@ export const defaultSettings = {
   unpackedHours: 30,
   reminderEveryHours: 12,
   duplicateWindowHours: 3,
+  // כמה אחורה לסרוק בכל הרצה. 26 מכסה הרצה יומית עם מרווח ביטחון.
+  lookbackHours: 26,
   largeOrderAmount: 2000,
   quietHoursStart: 22,
   quietHoursEnd: 7,

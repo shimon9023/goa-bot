@@ -14,7 +14,7 @@ import * as checks from './checks.js';
 import * as settings from './settings.js';
 import * as woo from './woo.js';
 import * as ai from './ai.js';
-import { startSchedulers } from './alerts.js';
+import { startSchedulers, runAllChecks } from './alerts.js';
 import {
   sendMessage,
   answerCallbackQuery,
@@ -536,11 +536,42 @@ app.post('/api/product/:draftId', async (req, res) => {
   }
 });
 
+// --- הנתיב שמייק קורא לו פעם ביום ---
+// מעיר את השרת ומריץ את בדיקות ההתראות.
+
+app.post('/cron/run-checks', async (req, res) => {
+  if (!config.cronSecret) {
+    return res.status(503).json({ error: 'CRON_SECRET לא הוגדר' });
+  }
+
+  const provided = req.get('X-Cron-Secret') || req.query.secret;
+
+  if (provided !== config.cronSecret) {
+    return res.sendStatus(401);
+  }
+
+  res.json({ ok: true, startedAt: new Date().toISOString() });
+
+  try {
+    await runAllChecks();
+    console.log('בדיקות ההתראות הסתיימו');
+  } catch (error) {
+    console.error('הרצת הבדיקות נכשלה:', error.message);
+  }
+});
+
 // --- בדיקת חיים, בשביל Render ---
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
 app.listen(config.port, () => {
   console.log(`הבוט מאזין על פורט ${config.port}`);
-  startSchedulers();
+
+  // בתוכנית החינמית השרת נרדם, אז המתזמן הפנימי לא אמין
+  // ומייק הוא זה שמעיר ומריץ. בתוכנית בתשלום המתזמן עובד כרגיל.
+  if (process.env.USE_INTERNAL_SCHEDULER !== 'false') {
+    startSchedulers();
+  } else {
+    console.log('המתזמן הפנימי כבוי. ההרצה מגיעה ממייק.');
+  }
 });
