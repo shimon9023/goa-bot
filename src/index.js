@@ -12,6 +12,7 @@ import * as orders from './orders.js';
 import * as products from './products.js';
 import * as checks from './checks.js';
 import * as settings from './settings.js';
+import * as freetext from './freetext.js';
 import * as woo from './woo.js';
 import * as ai from './ai.js';
 import { startSchedulers, runAllChecks } from './alerts.js';
@@ -234,8 +235,15 @@ async function handleTextInput(chatId, userId, text) {
     return;
   }
 
-  // ברירת מחדל: מתייחסים לטקסט חופשי כחיפוש מוצר
-  await inventory.handleProductSearch(chatId, userId, text);
+  // ברירת מחדל: קלוד מבין מה רוצים ומציג לאישור לפני שנוגעים באתר
+  try {
+    await freetext.handle(chatId, userId, text);
+  } catch (error) {
+    console.error('הבנת הבקשה נכשלה:', error.message);
+    // אם קלוד לא זמין או שעברנו את התקרה, נופלים לחיפוש מוצר רגיל
+    await sendMessage(chatId, `לא הצלחתי להבין את הבקשה (${error.message}). מחפש כמוצר.`);
+    await inventory.handleProductSearch(chatId, userId, text);
+  }
 }
 
 // --- טיפול בלחיצות על כפתורים ---
@@ -260,6 +268,12 @@ async function handleCallback(query) {
 
   if (scope === 'prod') {
     await handleProductCallback(chatId, userId, action, rest);
+    return;
+  }
+
+  if (scope === 'ft') {
+    if (action === 'yes') await freetext.confirm(chatId, userId);
+    else await freetext.cancel(chatId, userId);
     return;
   }
 

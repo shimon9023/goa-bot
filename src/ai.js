@@ -3,7 +3,13 @@
 
 import { config } from './config.js';
 import { supabase } from './db.js';
-import { WRITING_RULES, VISION_RULES, SHELF_RULES } from './writing-rules.js';
+import {
+  SHORT_DESCRIPTION_RULES,
+  DESCRIPTION_RULES,
+  META_RULES,
+  VISION_RULES,
+  SHELF_RULES,
+} from './writing-rules.js';
 
 // שמות המודלים. גוגל מוציאה גרסאות משימוש מדי פעם,
 // אז אפשר לעקוף דרך משתני סביבה בלי לגעת בקוד.
@@ -132,7 +138,15 @@ export async function writeProductContent({
   tags,
   webContext = '',
 }) {
-  const system = `${WRITING_RULES}
+  const system = `${DESCRIPTION_RULES}
+
+---
+
+בנוסף לתיאור המלא, אתה כותב גם תיאור קצר. הכללים שלו:
+
+${SHORT_DESCRIPTION_RULES.split('## המשימה: תיאור קצר')[1]}
+
+---
 
 הקטגוריות הקיימות באתר (מותר לבחור רק מתוכן):
 ${categories.map((c) => `- ${c.name}`).join('\n')}
@@ -161,15 +175,53 @@ ${tags.map((t) => `- ${t.name}`).join('\n')}
   "name": "שם המוצר",
   "categories": ["שם קטגוריה קיימת"],
   "tags": ["שם תגית קיימת"],
-  "shortDescription": "תיאור קצר",
-  "description": "תיאור מלא, עם פסקאות מופרדות בשורה ריקה",
-  "metaTitle": "מטא כותרת",
-  "metaDescription": "מטא תיאור",
+  "shortDescription": "משפט אחד בלבד, עד 15 מילים",
+  "description": "תיאור מלא, פסקאות מופרדות בשורה ריקה",
   "priceFromUser": null,
+  "productKind": "סוג המוצר במילה או שתיים, למשל חד פעמי, גחלים, נוזל סולט",
+  "isBulk": false,
   "notes": "דברים שלא היית בטוח לגביהם"
 }
 
-אם שמעון אמר מחיר, שים אותו ב-priceFromUser כמספר. אם לא אמר, השאר null.`,
+אם שמעון אמר מחיר, שים אותו ב-priceFromUser כמספר. אם לא אמר, השאר null.
+isBulk הוא true רק אם זה פריט שנקנה בכמות, כמו פאקט ניירות, פילטרים או שקיות ניקוטין.
+אל תכתוב מטא כאן. המטא נכתב בשלב נפרד.`,
+      },
+    ],
+  });
+}
+
+// --- מטא SEO, בקריאה נפרדת עם הכללים שלו ---
+
+export async function writeMeta({ name, description, price, productKind, isBulk }) {
+  const priceNote = price
+    ? `מחיר המוצר: ${price} ₪`
+    : 'אין מחיר. כתוב את הכותרת בלי מחיר, וציין בהערות שחסר מחיר.';
+
+  return callClaudeJson({
+    system: META_RULES,
+    maxTokens: 1200,
+    messages: [
+      {
+        role: 'user',
+        content: `שם המוצר: ${name}
+סוג המוצר: ${productKind || 'לא ידוע'}
+${priceNote}
+פריט שנקנה בכמות: ${isBulk ? 'כן' : 'לא'}
+
+התיאור של המוצר:
+${description}
+
+החזר JSON:
+{
+  "metaTitle": "הכותרת",
+  "metaDescription": "התיאור",
+  "titleLength": 0,
+  "descriptionLength": 0,
+  "angle": "משפט אחד, למה זה ינצח את המתחרים"
+}
+
+titleLength ו-descriptionLength הם ספירת התווים בפועל. ודא שהם בטווח לפני שאתה מחזיר.`,
       },
     ],
   });
@@ -178,7 +230,7 @@ ${tags.map((t) => `- ${t.name}`).join('\n')}
 // תיקון תוכן לפי הערה חופשית
 export async function reviseProductContent(current, instruction) {
   return callClaudeJson({
-    system: WRITING_RULES,
+    system: DESCRIPTION_RULES,
     maxTokens: 3000,
     messages: [
       {
@@ -456,6 +508,57 @@ export async function saveImageFeedback({ productName, beforeUrl, note, afterUrl
   } catch (error) {
     console.error('שמירת המשוב נכשלה:', error.message);
   }
+}
+
+// --- הבנת כוונה מטקסט חופשי ---
+// כל הודעה שאינה כפתור עוברת כאן. קלוד מחזיר מה הוא הבין,
+// והבוט מציג את זה לאישור לפני שהוא נוגע באתר.
+
+export async function readIntent(text, { products = [], recentOrders = [] } = {}) {
+  const system = `אתה מתרגם בקשות בעברית חופשית לפעולות בחנות של GOA.
+
+הפעולות האפשריות:
+- stock_in: לסמן מוצר כזמין במלאי
+- stock_out: לסמן מוצר כאזל
+- stock_qty: לקבוע כמות מדויקת
+- product_info: להציג את מצב המוצר בלי לשנות כלום
+- orders_pending: להציג הזמנות שממתינות לאריזה
+- order_question: שאלה על הזמנה מסוימת או על ההזמנות
+- sold_out_report: להציג מוצרים שנמכרו ואזלו
+- new_product: להתחיל יצירת מוצר חדש
+- unknown: לא הבנת מה רוצים
+
+המוצרים שנמצאו בחנות לפי החיפוש:
+${products.length ? products.map((p) => `- ${p.name} (מזהה ${p.id})`).join('\n') : '(לא נמצאו מוצרים מתאימים)'}
+
+כללים:
+- בחר productId רק מתוך הרשימה למעלה. אם אין התאמה ברורה, השאר null.
+- אם המשתמש מזכיר מוצר שלא ברשימה, זה unknown עם הסבר.
+- confidence הוא מספר בין 0 ל-1.`;
+
+  return callClaudeJson({
+    system,
+    maxTokens: 800,
+    messages: [
+      {
+        role: 'user',
+        content: `הבקשה: ${text}
+
+${recentOrders.length ? `הזמנות אחרונות:\n${JSON.stringify(recentOrders)}` : ''}
+
+החזר JSON:
+{
+  "action": "אחת מהפעולות",
+  "productId": null,
+  "productName": "השם כפי שמופיע ברשימה, או null",
+  "quantity": null,
+  "confidence": 0.9,
+  "summary": "משפט אחד בעברית: מה אתה עומד לעשות",
+  "question": "אם לא הבנת, מה לשאול את שמעון. אחרת null"
+}`,
+      },
+    ],
+  });
 }
 
 // --- שאלות חופשיות על הזמנות ---

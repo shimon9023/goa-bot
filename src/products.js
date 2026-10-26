@@ -23,7 +23,7 @@ import {
 // --- טיוטות ---
 
 export async function saveDraft(draftId, userId, content, images = []) {
-  await supabase.from('bot_product_drafts').upsert(
+  const { error } = await supabase.from('bot_product_drafts').upsert(
     {
       id: draftId,
       user_id: String(userId),
@@ -33,20 +33,33 @@ export async function saveDraft(draftId, userId, content, images = []) {
     },
     { onConflict: 'id' }
   );
+
+  if (error) {
+    console.error('שמירת טיוטה נכשלה:', error.message);
+    throw new Error(`שמירת הטיוטה נכשלה: ${error.message}`);
+  }
+
+  return draftId;
 }
 
 export async function getDraft(draftId) {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('bot_product_drafts')
     .select('*')
     .eq('id', draftId)
     .maybeSingle();
 
+  if (error) {
+    console.error('קריאת טיוטה נכשלה:', error.message);
+    throw new Error(`קריאת הטיוטה נכשלה: ${error.message}`);
+  }
+
   return data || null;
 }
 
 export async function deleteDraft(draftId) {
-  await supabase.from('bot_product_drafts').delete().eq('id', draftId);
+  const { error } = await supabase.from('bot_product_drafts').delete().eq('id', draftId);
+  if (error) console.error('מחיקת טיוטה נכשלה:', error.message);
 }
 
 // --- התחלת מוצר חדש ---
@@ -86,14 +99,24 @@ export async function collectPhoto(userId, photoSizes) {
   const state = await db.getState(userId);
   if (state?.module !== 'product') return false;
 
-  // טלגרם שולח כמה גדלים, לוקחים את הגדול ביותר
+  // טלגרם שולח כמה גדלים, לוקחים את הגדול ביותר.
+  // שומרים את מזהה הקובץ ולא את הקישור: הקישור מכיל את הטוקן של הבוט
+  // והוא פג תוקף אחרי כשעה.
   const largest = photoSizes[photoSizes.length - 1];
-  const file = await getFile(largest.file_id);
 
-  state.photos = [...(state.photos || []), fileUrl(file.file_path)];
+  state.photos = [...(state.photos || []), largest.file_id];
   await db.setState(userId, state);
 
   return true;
+}
+
+// ממיר מזהה קובץ לקישור טרי. נקרא רק ברגע השימוש.
+export async function resolvePhotoUrl(fileId) {
+  // תאימות לאחור לטיוטות ישנות ששמרו קישור מלא
+  if (String(fileId).startsWith('http')) return fileId;
+
+  const file = await getFile(fileId);
+  return fileUrl(file.file_path);
 }
 
 export async function collectVoice(userId, voice) {
@@ -138,7 +161,7 @@ export async function buildDraft(chatId, userId) {
   let imageDescription = '';
   if (state.photos?.length) {
     try {
-      imageDescription = await ai.describeProductImage(state.photos[0]);
+      imageDescription = await ai.describeProductImage(await resolvePhotoUrl(state.photos[0]));
     } catch (error) {
       console.error('קריאת התמונה נכשלה:', error.message);
     }
@@ -153,6 +176,20 @@ export async function buildDraft(chatId, userId) {
     tags,
   });
 
+  // המטא נכתב בקריאה נפרדת, עם כללי ה-SEO של GOA
+  let meta = {};
+  try {
+    meta = await ai.writeMeta({
+      name: content.name,
+      description: content.description,
+      price: content.priceFromUser,
+      productKind: content.productKind,
+      isBulk: content.isBulk,
+    });
+  } catch (error) {
+    console.error('כתיבת המטא נכשלה:', error.message);
+  }
+
   // מחקר מתחרים לפי הקטגוריה הראשונה שנבחרה
   let research = null;
   try {
@@ -166,7 +203,7 @@ export async function buildDraft(chatId, userId) {
   await saveDraft(
     draftId,
     userId,
-    { ...content, research, sourcePhotos: state.photos || [] },
+    { ...content, ...meta, research },
     state.photos || []
   );
 
@@ -257,7 +294,7 @@ export async function generateImage(chatId, userId, draftId, kind, correctionHin
 
   await sendMessage(chatId, 'מייצר תמונה.');
 
-  const sourceUrl = draft.images[0];
+  const sourceUrl = await resolvePhotoUrl(draft.images[0]);
   const isClothing = kind !== 'product';
 
   const result = await ai.generateProductImage(sourceUrl, {
@@ -343,12 +380,22 @@ export async function publish(chatId, userId, draftId, status) {
 
   const created = await woo.createProduct(payload);
 
-  // מטא SEO של Yoast
+  // מטא SEO של Yoast. דורש את הסניפט שפותח את ההרשאה באתר.
+  let metaWarning = '';
+
   if (content.metaTitle || content.metaDescription) {
     try {
       await woo.setYoastMeta(created.id, content.metaTitle, content.metaDescription);
     } catch (error) {
       console.error('כתיבת המטא נכשלה:', error.message);
+      metaWarning = [
+        '',
+        '⚠️ <b>המטא לא נשמר.</b> צריך להתקין את סניפט ההרשאה באתר.',
+        'בינתיים, להעתקה ידנית ל-Yoast:',
+        '',
+        `<b>כותרת:</b> <code>${content.metaTitle || ''}</code>`,
+        `<b>תיאור:</b> <code>${content.metaDescription || ''}</code>`,
+      ].join('\n');
     }
   }
 
@@ -369,7 +416,8 @@ export async function publish(chatId, userId, draftId, status) {
       '',
       created.name,
       created.permalink,
-    ].join('\n'),
+      metaWarning,
+    ].filter(Boolean).join('\n'),
     { reply_markup: mainKeyboard }
   );
 }

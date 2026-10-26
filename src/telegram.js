@@ -31,15 +31,22 @@ export function sendMessage(chatId, text, extra = {}) {
   });
 }
 
-export function editMessageText(chatId, messageId, text, extra = {}) {
-  return call('editMessageText', {
-    chat_id: chatId,
-    message_id: messageId,
-    text,
-    parse_mode: 'HTML',
-    disable_web_page_preview: true,
-    ...extra,
-  });
+export async function editMessageText(chatId, messageId, text, extra = {}) {
+  try {
+    return await call('editMessageText', {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+      ...extra,
+    });
+  } catch (error) {
+    // טלגרם מתלונן כשמעדכנים הודעה לאותו תוכן בדיוק.
+    // זה לא כישלון, פשוט אין מה לשנות.
+    if (error.message.includes('message is not modified')) return null;
+    throw error;
+  }
 }
 
 export function answerCallbackQuery(callbackQueryId, text = '') {
