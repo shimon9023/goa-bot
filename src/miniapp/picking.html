@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ליקוט הזמנה</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #0d0d0f;
+    --surface: #17171b;
+    --surface-2: #1f1f25;
+    --line: #2a2a32;
+    --text: #f2f2f4;
+    --muted: #9a9aa5;
+    --accent: #c9a227;
+    --ok: #3ba55d;
+    --radius: 16px;
+    --ease: cubic-bezier(.32, .72, 0, 1);
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f6f6f7;
+      --surface: #ffffff;
+      --surface-2: #f0f0f2;
+      --line: #e2e2e6;
+      --text: #15151a;
+      --muted: #6c6c78;
+    }
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  body {
+    margin: 0;
+    padding: 0 16px calc(96px + env(safe-area-inset-bottom));
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .shipping {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    margin: 0 -16px 16px;
+    padding: 18px 16px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+    backdrop-filter: saturate(180%) blur(20px);
+  }
+
+  .shipping .label {
+    font-size: 12px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+
+  .shipping .method {
+    font-size: 24px;
+    font-weight: 650;
+    letter-spacing: -.02em;
+    color: var(--accent);
+  }
+
+  .shipping .meta {
+    margin-top: 6px;
+    font-size: 14px;
+    color: var(--muted);
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+
+  .card h2 {
+    margin: 0 0 10px;
+    font-size: 13px;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+  }
+
+  .customer-row { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; }
+  .customer-row span:first-child { color: var(--muted); flex-shrink: 0; }
+  .customer-row span:last-child { text-align: left; }
+  .customer-row a { color: var(--accent); text-decoration: none; }
+
+  .note {
+    margin-top: 10px;
+    padding: 10px 12px;
+    background: var(--surface-2);
+    border-radius: 10px;
+    font-size: 15px;
+  }
+
+  ul.items { list-style: none; margin: 0; padding: 0; }
+
+  li.item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px;
+    margin-bottom: 10px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: transform .22s var(--ease), opacity .22s var(--ease), border-color .22s var(--ease);
+  }
+
+  li.item:active { transform: scale(.985); }
+
+  li.item.picked { opacity: .5; border-color: var(--ok); }
+  li.item.picked .name { text-decoration: line-through; }
+
+  .thumb {
+    width: 58px; height: 58px;
+    flex-shrink: 0;
+    border-radius: 12px;
+    object-fit: cover;
+    background: var(--surface-2);
+  }
+
+  .info { flex: 1; min-width: 0; }
+  .name { font-weight: 600; letter-spacing: -.01em; }
+  .sku { font-size: 13px; color: var(--muted); margin-top: 2px; }
+
+  .qty {
+    flex-shrink: 0;
+    min-width: 44px;
+    text-align: center;
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--accent);
+  }
+
+  .check {
+    flex-shrink: 0;
+    width: 28px; height: 28px;
+    border: 2px solid var(--line);
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    transition: background .22s var(--ease), border-color .22s var(--ease);
+  }
+
+  li.item.picked .check { background: var(--ok); border-color: var(--ok); }
+  .check svg { opacity: 0; transition: opacity .18s var(--ease); }
+  li.item.picked .check svg { opacity: 1; }
+
+  .footer {
+    position: fixed;
+    inset-inline: 0;
+    bottom: 0;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    background: linear-gradient(to top, var(--bg) 70%, transparent);
+  }
+
+  button.done {
+    width: 100%;
+    padding: 17px;
+    border: none;
+    border-radius: 14px;
+    background: var(--accent);
+    color: #15151a;
+    font-size: 17px;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    transition: transform .22s var(--ease), opacity .22s var(--ease);
+  }
+
+  button.done:active { transform: scale(.98); }
+  button.done:disabled { opacity: .45; cursor: default; }
+
+  .progress { text-align: center; font-size: 13px; color: var(--muted); margin-bottom: 10px; }
+
+  .state { text-align: center; padding: 60px 20px; color: var(--muted); }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div id="root"><div class="state">טוען…</div></div>
+
+<script>
+(function () {
+  const tg = window.Telegram?.WebApp;
+  if (tg) { tg.ready(); tg.expand(); }
+
+  const orderId = location.pathname.split('/').filter(Boolean).pop();
+  const root = document.getElementById('root');
+  const picked = new Set();
+  let data = null;
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  function render() {
+    const c = data.customer;
+
+    root.innerHTML = `
+      <div class="shipping">
+        <div class="label">שיטת משלוח</div>
+        <div class="method">${esc(data.shippingMethod)}</div>
+        <div class="meta">הזמנה #${esc(data.number)} · ממתינה ${esc(data.waitingFor)}</div>
+      </div>
+
+      <div class="card">
+        <h2>פרטי לקוח</h2>
+        <div class="customer-row"><span>שם</span><span>${esc(c.name)}</span></div>
+        ${c.phone ? `<div class="customer-row"><span>טלפון</span><a href="tel:${esc(c.phone)}">${esc(c.phone)}</a></div>` : ''}
+        ${c.address ? `<div class="customer-row"><span>כתובת</span><span>${esc(c.address)}</span></div>` : ''}
+        <div class="customer-row"><span>סכום</span><span>${esc(data.total)} ₪</span></div>
+        ${data.note ? `<div class="note">${esc(data.note)}</div>` : ''}
+      </div>
+
+      <div class="card">
+        <h2>פריטים לליקוט</h2>
+        <ul class="items">
+          ${data.items.map((item) => `
+            <li class="item" data-id="${item.id}">
+              ${item.image
+                ? `<img class="thumb" src="${esc(item.image)}" alt="" loading="lazy">`
+                : `<div class="thumb"></div>`}
+              <div class="info">
+                <div class="name">${esc(item.name)}</div>
+                ${item.sku ? `<div class="sku">${esc(item.sku)}</div>` : ''}
+              </div>
+              <div class="qty">${item.quantity}</div>
+              <div class="check">
+                <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
+                  <path d="M3 8.5L6.2 11.5L13 4.5" stroke="#fff" stroke-width="2.2"
+                        stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </div>
+            </li>`).join('')}
+        </ul>
+      </div>
+
+      <div class="footer">
+        <div class="progress" id="progress"></div>
+        <button class="done" id="done">הזמנה הושלמה</button>
+      </div>`;
+
+    root.querySelectorAll('li.item').forEach((el) => {
+      el.addEventListener('click', () => {
+        const id = el.dataset.id;
+        if (picked.has(id)) { picked.delete(id); el.classList.remove('picked'); }
+        else { picked.add(id); el.classList.add('picked'); tg?.HapticFeedback?.impactOccurred('light'); }
+        updateProgress();
+      });
+    });
+
+    document.getElementById('done').addEventListener('click', complete);
+    updateProgress();
+  }
+
+  function updateProgress() {
+    const total = data.items.length;
+    document.getElementById('progress').textContent = `${picked.size} מתוך ${total} פריטים סומנו`;
+  }
+
+  async function complete() {
+    const btn = document.getElementById('done');
+    btn.disabled = true;
+    btn.textContent = 'סוגר…';
+
+    try {
+      const res = await fetch(`/api/picking/${orderId}/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initData: tg?.initData || '' }),
+      });
+
+      if (!res.ok) throw new Error(await res.text());
+
+      btn.textContent = 'הושלמה ✓';
+      tg?.HapticFeedback?.notificationOccurred('success');
+      setTimeout(() => tg?.close(), 700);
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = 'הזמנה הושלמה';
+      alert('לא הצלחתי לסגור את ההזמנה. נסה שוב.');
+    }
+  }
+
+  fetch(`/api/picking/${orderId}`)
+    .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
+    .then((payload) => { data = payload; render(); })
+    .catch(() => { root.innerHTML = '<div class="state">לא הצלחתי לטעון את ההזמנה.</div>'; });
+})();
+</script>
+</body>
+</html>

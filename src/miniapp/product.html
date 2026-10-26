@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>עריכת מוצר</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: #0d0d0f;
+    --surface: #17171b;
+    --surface-2: #1f1f25;
+    --line: #2a2a32;
+    --text: #f2f2f4;
+    --muted: #9a9aa5;
+    --accent: #c9a227;
+    --ok: #3ba55d;
+    --radius: 14px;
+    --ease: cubic-bezier(.32, .72, 0, 1);
+  }
+
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f6f6f7;
+      --surface: #ffffff;
+      --surface-2: #f0f0f2;
+      --line: #e2e2e6;
+      --text: #15151a;
+      --muted: #6c6c78;
+    }
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  body {
+    margin: 0;
+    padding: 20px 16px calc(104px + env(safe-area-inset-bottom));
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .field { margin-bottom: 18px; }
+
+  label {
+    display: block;
+    font-size: 12px;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 7px;
+    font-weight: 600;
+  }
+
+  input[type="text"], textarea {
+    width: 100%;
+    padding: 13px 14px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 16px;
+    line-height: 1.55;
+    resize: vertical;
+    transition: border-color .22s var(--ease);
+  }
+
+  input[type="text"]:focus, textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  textarea.short { min-height: 80px; }
+  textarea.long { min-height: 190px; }
+
+  .count { font-size: 12px; color: var(--muted); margin-top: 5px; text-align: left; }
+  .count.over { color: #e2574c; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+
+  .chip {
+    padding: 8px 14px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background .2s var(--ease), border-color .2s var(--ease), color .2s var(--ease);
+  }
+
+  .chip.on {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #15151a;
+    font-weight: 600;
+  }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 15px;
+    margin-bottom: 18px;
+  }
+
+  .card h2 {
+    margin: 0 0 11px;
+    font-size: 12px;
+    letter-spacing: .07em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+  }
+
+  .comp-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .comp-row:last-child { border-bottom: none; }
+  .comp-row a { color: var(--accent); text-decoration: none; font-weight: 500; }
+  .comp-row .range { font-variant-numeric: tabular-nums; }
+  .comp-row .none { color: var(--muted); font-size: 14px; }
+
+  .hint {
+    margin-top: 11px;
+    padding-top: 11px;
+    border-top: 1px solid var(--line);
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .price-row { display: flex; align-items: center; gap: 10px; }
+  .price-row input { flex: 1; }
+  .price-row .unit { font-size: 18px; color: var(--muted); }
+
+  .footer {
+    position: fixed;
+    inset-inline: 0;
+    bottom: 0;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    background: linear-gradient(to top, var(--bg) 72%, transparent);
+    display: flex;
+    gap: 10px;
+  }
+
+  button.act {
+    flex: 1;
+    padding: 16px;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 16px;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    transition: transform .2s var(--ease), opacity .2s var(--ease);
+  }
+
+  button.act:active { transform: scale(.98); }
+  button.act:disabled { opacity: .45; }
+
+  button.draft { background: var(--surface-2); color: var(--text); border: 1px solid var(--line); }
+  button.live { background: var(--accent); color: #15151a; }
+
+  .state { text-align: center; padding: 70px 20px; color: var(--muted); }
+  .err { color: #e2574c; font-size: 13px; margin-top: 6px; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<div id="root"><div class="state">טוען…</div></div>
+
+<script>
+(function () {
+  const tg = window.Telegram?.WebApp;
+  if (tg) { tg.ready(); tg.expand(); }
+
+  const draftId = location.pathname.split('/').filter(Boolean).pop();
+  const root = document.getElementById('root');
+  let data = null, allCategories = [], allTags = [];
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  function chips(list, selected, group) {
+    return list.map((item) => {
+      const on = selected.includes(item.name) ? ' on' : '';
+      return `<div class="chip${on}" data-group="${group}" data-name="${esc(item.name)}">${esc(item.name)}</div>`;
+    }).join('');
+  }
+
+  function competitorBlock() {
+    const r = data.research;
+    if (!r || !r.found) {
+      return `<div class="card"><h2>מחירים אצל המתחרים</h2>
+        <div class="comp-row"><span class="none">${esc(r?.message || 'לא נמצא אצל המתחרים')}</span></div></div>`;
+    }
+
+    const rows = r.results.map((c) => {
+      if (c.status === 'ok') {
+        const range = c.min === c.max ? `${c.min} ₪` : `${c.min}-${c.max} ₪`;
+        return `<div class="comp-row"><a href="${esc(c.url)}" target="_blank">${esc(c.name)}</a><span class="range">${range}</span></div>`;
+      }
+      const label = c.status === 'not_found' ? 'לא נמצא' : 'לא הצלחתי לבדוק';
+      return `<div class="comp-row"><span>${esc(c.name)}</span><span class="none">${label}</span></div>`;
+    }).join('');
+
+    return `<div class="card"><h2>מחירים אצל המתחרים</h2>${rows}
+      <div class="hint">המחיר נקבע על ידך בלבד.</div></div>`;
+  }
+
+  function render() {
+    const c = data;
+
+    root.innerHTML = `
+      <div class="field">
+        <label>שם המוצר</label>
+        <input type="text" id="name" value="${esc(c.name)}">
+      </div>
+
+      <div class="field">
+        <label>קטגוריות</label>
+        <div class="chips" id="cats">${chips(allCategories, c.categories || [], 'cat')}</div>
+      </div>
+
+      <div class="field">
+        <label>תגיות</label>
+        <div class="chips" id="tags">${chips(allTags, c.tags || [], 'tag')}</div>
+      </div>
+
+      <div class="field">
+        <label>תיאור קצר</label>
+        <textarea id="short" class="short">${esc(c.shortDescription)}</textarea>
+      </div>
+
+      <div class="field">
+        <label>תיאור מלא</label>
+        <textarea id="desc" class="long">${esc(c.description)}</textarea>
+      </div>
+
+      <div class="field">
+        <label>מטא כותרת</label>
+        <input type="text" id="mtitle" value="${esc(c.metaTitle)}">
+        <div class="count" id="mtitle-count"></div>
+      </div>
+
+      <div class="field">
+        <label>מטא תיאור</label>
+        <textarea id="mdesc" class="short">${esc(c.metaDescription)}</textarea>
+        <div class="count" id="mdesc-count"></div>
+      </div>
+
+      ${competitorBlock()}
+
+      <div class="field">
+        <label>מחיר</label>
+        <div class="price-row">
+          <input type="text" id="price" inputmode="decimal" value="${c.priceFromUser ?? ''}" placeholder="לא נקבע">
+          <span class="unit">₪</span>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>כמות במלאי</label>
+        <input type="text" id="stock" inputmode="numeric" value="${c.stockQuantity ?? ''}" placeholder="ריק = לא מנהל כמות">
+      </div>
+
+      <div class="footer">
+        <button class="act draft" id="save-draft">שמור כטיוטה</button>
+        <button class="act live" id="publish">פרסם לאוויר</button>
+      </div>`;
+
+    root.querySelectorAll('.chip').forEach((el) => {
+      el.addEventListener('click', () => {
+        el.classList.toggle('on');
+        tg?.HapticFeedback?.selectionChanged();
+      });
+    });
+
+    const counters = [
+      ['mtitle', 'mtitle-count', 60],
+      ['mdesc', 'mdesc-count', 155],
+    ];
+
+    counters.forEach(([inputId, countId, limit]) => {
+      const input = document.getElementById(inputId);
+      const out = document.getElementById(countId);
+      const update = () => {
+        const n = input.value.length;
+        out.textContent = `${n} מתוך ${limit} תווים`;
+        out.className = n > limit ? 'count over' : 'count';
+      };
+      input.addEventListener('input', update);
+      update();
+    });
+
+    document.getElementById('save-draft').addEventListener('click', () => submit('draft'));
+    document.getElementById('publish').addEventListener('click', () => submit('publish'));
+  }
+
+  function collect() {
+    const picked = (group) =>
+      [...root.querySelectorAll(`.chip.on[data-group="${group}"]`)].map((el) => el.dataset.name);
+
+    const price = document.getElementById('price').value.trim();
+    const stock = document.getElementById('stock').value.trim();
+
+    return {
+      name: document.getElementById('name').value.trim(),
+      categories: picked('cat'),
+      tags: picked('tag'),
+      shortDescription: document.getElementById('short').value.trim(),
+      description: document.getElementById('desc').value.trim(),
+      metaTitle: document.getElementById('mtitle').value.trim(),
+      metaDescription: document.getElementById('mdesc').value.trim(),
+      priceFromUser: price ? Number(price) : null,
+      stockQuantity: stock ? Number(stock) : null,
+    };
+  }
+
+  async function submit(status) {
+    const content = collect();
+
+    if (!content.name) {
+      alert('צריך שם למוצר.');
+      return;
+    }
+
+    const buttons = root.querySelectorAll('button.act');
+    buttons.forEach((b) => (b.disabled = true));
+
+    try {
+      const res = await fetch(`/api/product/${draftId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, status, initData: tg?.initData || '' }),
+      });
+
+      if (!res.ok) throw new Error(await res.text());
+
+      tg?.HapticFeedback?.notificationOccurred('success');
+      setTimeout(() => tg?.close(), 500);
+    } catch (err) {
+      buttons.forEach((b) => (b.disabled = false));
+      alert('לא הצלחתי לשמור. נסה שוב.');
+    }
+  }
+
+  fetch(`/api/product/${draftId}`)
+    .then((r) => { if (!r.ok) throw new Error(); return r.json(); })
+    .then((payload) => {
+      data = payload.content;
+      allCategories = payload.categories;
+      allTags = payload.tags;
+      render();
+    })
+    .catch(() => { root.innerHTML = '<div class="state">לא הצלחתי לטעון את הטיוטה.</div>'; });
+})();
+</script>
+</body>
+</html>
