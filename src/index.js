@@ -248,15 +248,18 @@ async function handleCallback(query) {
 
   const [scope, action, ...rest] = parts;
 
+  // עונים לטלגרם מיד. יש חלון של 15 שניות בלבד,
+  // ופעולות כמו יצירת תמונה לוקחות יותר מזה.
+  await answerCallbackQuery(query.id).catch(() => {});
+
   if (scope === 'alert' && action === 'mute') {
     await db.muteOrder(rest[0]);
-    await answerCallbackQuery(query.id, 'ההתראות להזמנה הזו הושתקו');
+    await sendMessage(chatId, 'ההתראות להזמנה הזו הושתקו.');
     return;
   }
 
   if (scope === 'prod') {
     await handleProductCallback(chatId, userId, action, rest);
-    await answerCallbackQuery(query.id);
     return;
   }
 
@@ -266,18 +269,15 @@ async function handleCallback(query) {
       await db.setState(userId, { module: 'checks', awaiting: 'csv' });
       await sendMessage(chatId, 'שלח את קובץ ה-CSV שהורדת מטרנזילה.');
     }
-    await answerCallbackQuery(query.id);
     return;
   }
 
   if (scope === 'set') {
     await handleSettingsCallback(chatId, userId, action, rest);
-    await answerCallbackQuery(query.id);
     return;
   }
 
   if (scope !== 'inv') {
-    await answerCallbackQuery(query.id);
     return;
   }
 
@@ -339,8 +339,6 @@ async function handleCallback(query) {
       }
       break;
   }
-
-  await answerCallbackQuery(query.id);
 }
 
 // --- כפתורים של מודול המוצר ---

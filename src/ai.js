@@ -5,9 +5,11 @@ import { config } from './config.js';
 import { supabase } from './db.js';
 import { WRITING_RULES, VISION_RULES, SHELF_RULES } from './writing-rules.js';
 
-const CLAUDE_MODEL = 'claude-sonnet-5-5';
-const GEMINI_TEXT_MODEL = 'gemini-2.5-flash';
-const GEMINI_IMAGE_MODEL = 'gemini-2.5-flash-image';
+// שמות המודלים. גוגל מוציאה גרסאות משימוש מדי פעם,
+// אז אפשר לעקוף דרך משתני סביבה בלי לגעת בקוד.
+const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-sonnet-5-5';
+const GEMINI_TEXT_MODEL = process.env.GEMINI_TEXT_MODEL || 'gemini-3.8-flash';
+const GEMINI_IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL || 'gemini-2.5-flash-image';
 
 // מחירים לפי מיליון טוקנים, לחישוב העלות המשוערת
 const PRICE_PER_MILLION = { input: 2, output: 10 };
@@ -192,18 +194,58 @@ ${JSON.stringify(current, null, 2)}
   });
 }
 
+// --- זיהוי סוג הקובץ ---
+// טלגרם מגיש קבצים כ-application/octet-stream, ו-Claude ו-Gemini דוחים את זה.
+// מזהים לפי חתימת הבתים הראשונים, ואם לא זיהינו, לפי הסיומת.
+
+function sniffMime(buffer, url = '', fallback = 'image/jpeg') {
+  const head = buffer.subarray(0, 12);
+
+  if (head[0] === 0xff && head[1] === 0xd8) return 'image/jpeg';
+  if (head[0] === 0x89 && head[1] === 0x50) return 'image/png';
+  if (head[0] === 0x47 && head[1] === 0x49) return 'image/gif';
+  if (head.subarray(0, 4).toString('ascii') === 'RIFF') {
+    const kind = head.subarray(8, 12).toString('ascii');
+    if (kind === 'WEBP') return 'image/webp';
+    if (kind === 'WAVE') return 'audio/wav';
+  }
+  if (head.subarray(0, 4).toString('ascii') === 'OggS') return 'audio/ogg';
+  if (head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33) return 'audio/mpeg';
+  if (head.subarray(4, 8).toString('ascii') === 'ftyp') return 'audio/mp4';
+
+  const ext = (url.split('?')[0].match(/\.([a-z0-9]+)$/i) || [])[1]?.toLowerCase();
+  const byExt = {
+    jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+    gif: 'image/gif', webp: 'image/webp',
+    oga: 'audio/ogg', ogg: 'audio/ogg', opus: 'audio/ogg',
+    mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav',
+  }[ext];
+
+  return byExt || fallback;
+}
+
+// מוריד קובץ ומחזיר אותו עם סוג אמין
+async function fetchWithMime(url, fallback) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error('לא הצלחתי להוריד את הקובץ.');
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const declared = response.headers.get('content-type') || '';
+
+  // סומכים על מה שהשרת אמר רק אם זה באמת סוג מדיה
+  const trusted = /^(image|audio)\/(jpeg|png|gif|webp|ogg|mpeg|mp4|wav)$/.test(declared);
+
+  return { buffer, mimeType: trusted ? declared : sniffMime(buffer, url, fallback) };
+}
+
 // --- קריאת תמונות ---
 
 async function imageBlock(imageUrl) {
-  const response = await fetch(imageUrl);
-  if (!response.ok) throw new Error('לא הצלחתי להוריד את התמונה.');
-
-  const buffer = Buffer.from(await response.arrayBuffer());
-  const mediaType = response.headers.get('content-type') || 'image/jpeg';
+  const { buffer, mimeType } = await fetchWithMime(imageUrl, 'image/jpeg');
 
   return {
     type: 'image',
-    source: { type: 'base64', media_type: mediaType, data: buffer.toString('base64') },
+    source: { type: 'base64', media_type: mimeType, data: buffer.toString('base64') },
   };
 }
 
@@ -316,11 +358,7 @@ async function callGemini(model, body) {
 // --- Gemini: תמלול הקלטות ---
 
 export async function transcribe(audioUrl) {
-  const audio = await fetch(audioUrl);
-  if (!audio.ok) throw new Error('לא הצלחתי להוריד את ההקלטה.');
-
-  const buffer = Buffer.from(await audio.arrayBuffer());
-  const mimeType = audio.headers.get('content-type') || 'audio/ogg';
+  const { buffer, mimeType } = await fetchWithMime(audioUrl, 'audio/ogg');
 
   const data = await callGemini(GEMINI_TEXT_MODEL, {
     contents: [
@@ -379,11 +417,7 @@ export async function generateProductImage(imageUrl, { kind = 'product', clothin
   // ההערה של שמעון נדבקת בסוף, כמו correctionHint ב-AI Studio
   const prompt = correctionHint ? `${basePrompt}\n\n${correctionHint}` : basePrompt;
 
-  const source = await fetch(imageUrl);
-  if (!source.ok) throw new Error('לא הצלחתי להוריד את התמונה המקורית.');
-
-  const buffer = Buffer.from(await source.arrayBuffer());
-  const mimeType = source.headers.get('content-type') || 'image/jpeg';
+  const { buffer, mimeType } = await fetchWithMime(imageUrl, 'image/jpeg');
 
   const data = await callGemini(GEMINI_IMAGE_MODEL, {
     contents: [

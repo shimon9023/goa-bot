@@ -44,8 +44,10 @@ async function request(path, { method = 'GET', query = {}, body } = {}) {
 // --- מוצרים ---
 
 export function searchProducts(term, limit = 10) {
+  // בלי orderby. ווקומרס לא מקבל "relevance" למוצרים,
+  // והוא ממילא מחזיר את התוצאות לפי התאמה לחיפוש.
   return request('/products', {
-    query: { search: term, per_page: limit, status: 'any', orderby: 'relevance' },
+    query: { search: term, per_page: limit, status: 'any' },
   });
 }
 
