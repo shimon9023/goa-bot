@@ -9,6 +9,8 @@ import { supabase } from './db.js';
 import * as ai from './ai.js';
 import * as competitors from './competitors.js';
 import * as imagestore from './imagestore.js';
+import * as google from './google.js';
+import * as warehouse from './warehouse.js';
 import { config } from './config.js';
 import {
   sendMessage,
@@ -227,7 +229,15 @@ export async function buildDraft(chatId, userId) {
   await saveDraft(
     draftId,
     userId,
-    { ...content, ...meta, research, variants, variantAttribute: vision?.variantAttribute || 'טעם' },
+    {
+      ...content,
+      ...meta,
+      research,
+      variants,
+      variantAttribute: vision?.variantAttribute || 'טעם',
+      // כשהמוצר הגיע מרשימת המחסן, זוכרים לאיזו שורה לחזור אחרי הפרסום
+      warehouse: state.warehouse || null,
+    },
     state.photos || []
   );
 
@@ -238,6 +248,7 @@ export async function buildDraft(chatId, userId) {
     draftId,
     photos: state.photos || [],
     spoken: state.spoken || '',
+    warehouse: state.warehouse || null,
   });
 
   const editorUrl = `${config.publicBaseUrl}/product/${draftId}`;
@@ -574,6 +585,19 @@ export async function publish(chatId, userId, draftId, status) {
     after: { name: created.name, status: created.status },
   });
 
+  // אם המוצר הגיע מרשימת המחסן, מסמנים אותו שם כנוצר
+  let warehouseNote = '';
+
+  if (content.warehouse?.rowNumber) {
+    try {
+      await google.markCreated(content.warehouse.rowNumber, created.permalink);
+      warehouseNote = 'סומן כנוצר ברשימת המחסן.';
+    } catch (error) {
+      console.error('עדכון רשימת המחסן נכשל:', error.message);
+      warehouseNote = '⚠️ המוצר נוצר, אבל לא הצלחתי לעדכן את הסטטוס בשיטס.';
+    }
+  }
+
   await deleteDraft(draftId);
   await db.clearState(userId);
 
@@ -586,10 +610,44 @@ export async function publish(chatId, userId, draftId, status) {
       isVariable ? `${variantsCreated} וריאציות נוצרו` : '',
       variantsFailed.length ? `נכשלו: ${variantsFailed.join(', ')}` : '',
       created.permalink,
+      warehouseNote,
       metaWarning,
     ].filter(Boolean).join('\n'),
     { reply_markup: mainKeyboard }
   );
+}
+
+// --- מוצר שמתחיל מרשימת המחסן ---
+// התמונות והטקסט כבר קיימים, אז אין מה לאסוף. נכנסים ישר לעיבוד.
+
+export async function startFromWarehouseRow(chatId, userId, row) {
+  const photos = warehouse.rowFileIds(row);
+  const brief = warehouse.rowBrief(row);
+
+  if (!photos.length && !brief) {
+    await sendMessage(chatId, 'השורה הזו ריקה. בחר אחרת מהרשימה.');
+    return;
+  }
+
+  await db.setState(userId, {
+    module: 'product',
+    mode: 'new',
+    awaiting: 'input',
+    photos,
+    spoken: brief,
+    warehouse: { rowNumber: row.rowNumber, id: row.cells[google.COL.id] || '' },
+  });
+
+  await sendMessage(
+    chatId,
+    [
+      '<b>מהרשימה של המחסן</b>',
+      '',
+      warehouse.describeRow(row),
+    ].join('\n')
+  );
+
+  await buildDraft(chatId, userId);
 }
 
 // --- מסך אישור הווריאציות ---

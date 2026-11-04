@@ -90,6 +90,63 @@ export async function updateSettings(patch) {
   return merged;
 }
 
+// --- אחסון כללי ---
+// שורות נפרדות ב-bot_settings, לדברים שהם לא "ההגדרות" עצמן:
+// חיבור גוגל, אסימונים, וכל מצב שצריך לשרוד הפעלה מחדש של השרת.
+
+export async function getStore(key) {
+  const data = await tryRun(
+    `קריאת ${key}`,
+    supabase.from('bot_settings').select('value').eq('key', key).maybeSingle()
+  );
+
+  return data?.value || null;
+}
+
+export async function setStore(key, value) {
+  await run(
+    `שמירת ${key}`,
+    supabase.from('bot_settings').upsert(
+      { key, value, updated_at: new Date().toISOString() },
+      { onConflict: 'key' }
+    )
+  );
+}
+
+// --- משתמשים והרשאות ---
+
+export async function getUser(userId) {
+  const data = await tryRun(
+    'קריאת משתמש',
+    supabase.from('bot_users').select('*').eq('user_id', String(userId)).maybeSingle()
+  );
+
+  return data || null;
+}
+
+export async function listUsers() {
+  const data = await tryRun(
+    'קריאת משתמשים',
+    supabase.from('bot_users').select('*').order('created_at')
+  );
+
+  return data || [];
+}
+
+export async function upsertUser({ userId, name, areas }) {
+  await run(
+    'שמירת משתמש',
+    supabase.from('bot_users').upsert(
+      { user_id: String(userId), name: name || null, areas: areas || [] },
+      { onConflict: 'user_id' }
+    )
+  );
+}
+
+export async function removeUser(userId) {
+  await tryRun('מחיקת משתמש', supabase.from('bot_users').delete().eq('user_id', String(userId)));
+}
+
 // --- יומן פעולות ---
 // כל שינוי שהבוט עושה באתר נרשם כאן, כדי שאפשר יהיה לראות מה קרה ולבטל.
 

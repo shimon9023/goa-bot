@@ -51,6 +51,13 @@ export const config = {
     anthropicKey: optional('ANTHROPIC_API_KEY'),
     geminiKey: optional('GEMINI_API_KEY'),
   },
+
+  // חיבור לשיטס ולדרייב. ההרשאה עצמה נשמרת בסופהבייס,
+  // כאן רק הזהות של האפליקציה מול גוגל.
+  google: {
+    clientId: optional('GOOGLE_CLIENT_ID'),
+    clientSecret: optional('GOOGLE_CLIENT_SECRET'),
+  },
 };
 
 // ברירות מחדל של ההתראות. ניתנות לשינוי מתוך הבוט ונשמרות בסופהבייס.

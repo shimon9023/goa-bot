@@ -1,6 +1,7 @@
 // נקודת הכניסה: שרת Express שמקבל את ההודעות מטלגרם ומגיש את מסך הליקוט.
 
 import express from 'express';
+import { Buffer } from 'node:buffer';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -16,6 +17,9 @@ import * as freetext from './freetext.js';
 import * as imagestore from './imagestore.js';
 import * as woo from './woo.js';
 import * as ai from './ai.js';
+import * as google from './google.js';
+import * as warehouse from './warehouse.js';
+import * as access from './access.js';
 import { startSchedulers, runAllChecks } from './alerts.js';
 import {
   sendMessage,
@@ -28,41 +32,65 @@ import {
   fileUrl,
   setWebhook,
   getWebhookInfo,
+  verifyInitData,
 } from './telegram.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pickingHtml = readFileSync(join(__dirname, 'miniapp', 'picking.html'), 'utf8');
 const productHtml = readFileSync(join(__dirname, 'miniapp', 'product.html'), 'utf8');
+const warehouseHtml = readFileSync(join(__dirname, 'miniapp', 'warehouse.html'), 'utf8');
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
-// --- אבטחה ---
+// --- זרימת עובד המחסן ---
+// זה כל מה שהוא רואה. אין לו תפריט, אין לו הגדרות, ואין לו גישה לאתר.
 
-function isAllowed(userId) {
-  const list = config.telegram.allowedUserIds;
-  if (!list.length) return String(userId) === String(config.telegram.ownerId);
-  return list.includes(String(userId));
+async function handleWarehouseMessage(message) {
+  const chatId = message.chat.id;
+  const userId = message.from.id;
+  const text = (message.text || '').trim();
+
+  if (message.photo?.length) {
+    await warehouse.addPhotos(chatId, userId, message.photo);
+    return;
+  }
+
+  if (message.voice || message.audio) {
+    await warehouse.addVoice(chatId, userId, message.voice || message.audio);
+    return;
+  }
+
+  if (text === '/start' || text === 'התחל מההתחלה') {
+    await warehouse.welcome(chatId, userId);
+    return;
+  }
+
+  if (text) {
+    await warehouse.addNote(chatId, userId, text);
+    return;
+  }
+
+  await sendMessage(chatId, 'אני יודע לקבל תמונות, טקסט והקלטות.');
 }
 
-async function warnOwnerAboutStranger(user) {
-  if (!config.telegram.ownerId) return;
+async function handleWarehouseCallback(query) {
+  const chatId = query.message.chat.id;
+  const userId = query.from.id;
 
-  const name = [user.first_name, user.last_name].filter(Boolean).join(' ');
+  await answerCallbackQuery(query.id).catch(() => {});
 
-  try {
+  if ((query.data || '') !== 'wh:save') return;
+
+  const user = await db.getUser(userId);
+  const result = await warehouse.save(chatId, userId, user?.name || access.displayName(query.from));
+
+  // אם תמונות לא עלו לדרייב, שמעון צריך לדעת
+  if (result?.failed && config.telegram.ownerId) {
     await sendMessage(
       config.telegram.ownerId,
-      [
-        '🔒 <b>מישהו לא מוכר ניסה להשתמש בבוט</b>',
-        '',
-        `שם: ${name || 'לא ידוע'}`,
-        user.username ? `שם משתמש: @${user.username}` : '',
-        `מזהה: <code>${user.id}</code>`,
-      ].filter(Boolean).join('\n')
-    );
-  } catch (error) {
-    console.error('לא הצלחתי להתריע על ניסיון גישה:', error.message);
+      `⚠️ במוצר "${result.description || result.id}" מהמחסן, ${result.failed} תמונות לא עלו לדרייב.`
+    ).catch(() => {});
   }
 }
 
@@ -173,14 +201,27 @@ async function handleMessage(message) {
       await orders.showPendingOrders(chatId);
       return;
 
-    case 'מוצר חדש':
-      await sendMessage(chatId, 'מה נוסיף?', {
-        reply_markup: inlineKeyboard([
-          [button('מוצר חדש', 'prod:new')],
-          [button('וריאציה למוצר קיים', 'prod:variation')],
-        ]),
-      });
+    case 'מוצר חדש': {
+      const rows = [
+        [button('מוצר חדש', 'prod:new')],
+        [button('וריאציה למוצר קיים', 'prod:variation')],
+      ];
+
+      // האפשרות הזו מופיעה רק כשיש באמת מה לקחת מהרשימה
+      try {
+        if (await google.isConnected()) {
+          const pending = await google.pendingRows();
+          if (pending.length) {
+            rows.push([button(`מוצרים מהרשימה (${pending.length})`, 'prod:list')]);
+          }
+        }
+      } catch (error) {
+        console.error('קריאת רשימת המחסן נכשלה:', error.message);
+      }
+
+      await sendMessage(chatId, 'מה נוסיף?', { reply_markup: inlineKeyboard(rows) });
       return;
+    }
 
     case 'בדיקות':
       await db.clearState(userId);
@@ -235,10 +276,6 @@ async function handleTextInput(chatId, userId, text) {
     }
     if (state.awaiting === 'competitor') {
       await settings.saveCompetitor(chatId, userId, text);
-      return;
-    }
-    if (state.awaiting === 'user') {
-      await settings.saveUser(chatId, userId, text);
       return;
     }
   }
@@ -298,6 +335,18 @@ async function handleCallback(query) {
 
   if (scope === 'prod') {
     await handleProductCallback(chatId, userId, action, rest);
+    return;
+  }
+
+  if (scope === 'acc') {
+    if (action === 'ok') await access.approve(chatId, rest[0]);
+    else if (action === 'no') await access.reject(chatId, rest[0]);
+    else if (action === 'rm') await access.remove(chatId, rest[0]);
+    return;
+  }
+
+  if (scope === 'goog') {
+    await handleGoogleCallback(chatId, action);
     return;
   }
 
@@ -400,6 +449,71 @@ async function handleCallback(query) {
   }
 }
 
+// --- חיבור לגוגל ---
+
+async function handleGoogleCallback(chatId, action) {
+  if (action === 'off') {
+    await google.disconnect();
+    await sendMessage(chatId, 'החיבור לגוגל נותק. הגיליון והתיקייה נשארו בדרייב שלך.');
+    return;
+  }
+
+  if (action === 'connect') {
+    try {
+      const url = await google.startAuth();
+
+      await sendMessage(
+        chatId,
+        [
+          'לחץ על הכפתור, בחר את חשבון הגוגל של העסק ואשר.',
+          '',
+          'אני מבקש הרשאה צרה: גישה רק לקבצים שאני עצמי יוצר.',
+          'שום דבר אחר בדרייב שלך לא נגיש לי.',
+          '',
+          'הקישור תקף לעשר דקות.',
+        ].join('\n'),
+        { reply_markup: inlineKeyboard([[{ text: 'התחבר לגוגל', url }]]) }
+      );
+    } catch (error) {
+      await sendMessage(chatId, `לא הצלחתי להכין את החיבור: ${error.message}`);
+    }
+    return;
+  }
+
+  const state = await google.status();
+
+  if (!state.connected) {
+    await sendMessage(
+      chatId,
+      [
+        '<b>גוגל לא מחובר</b>',
+        '',
+        'בלי החיבור אין רשימת מחסן: אין לאן לכתוב את המוצרים ואין לאן להעלות תמונות.',
+      ].join('\n'),
+      { reply_markup: inlineKeyboard([[button('חבר עכשיו', 'goog:connect')]]) }
+    );
+    return;
+  }
+
+  await sendMessage(
+    chatId,
+    [
+      '<b>גוגל מחובר</b>',
+      '',
+      state.account ? `חשבון: ${state.account}` : '',
+      '',
+      state.sheetUrl ? `<a href="${state.sheetUrl}">הגיליון</a>` : '',
+      state.folderUrl ? `<a href="${state.folderUrl}">תיקיית התמונות</a>` : '',
+    ].filter(Boolean).join('\n'),
+    {
+      reply_markup: inlineKeyboard([
+        [button('חבר מחדש', 'goog:connect')],
+        [button('נתק', 'goog:off')],
+      ]),
+    }
+  );
+}
+
 // --- כפתורים של מודול המוצר ---
 
 async function handleProductCallback(chatId, userId, action, rest) {
@@ -411,6 +525,46 @@ async function handleProductCallback(chatId, userId, action, rest) {
     case 'variation':
       await products.startVariation(chatId, userId);
       break;
+
+    // רשימת המוצרים שצולמו במחסן
+    case 'list': {
+      const pending = await google.pendingRows();
+
+      if (!pending.length) {
+        await sendMessage(chatId, 'הרשימה ריקה. אין מוצרים שממתינים מהמחסן.');
+        break;
+      }
+
+      const next = pending[0];
+
+      await sendMessage(
+        chatId,
+        [
+          `<b>${pending.length} מוצרים ממתינים</b>`,
+          '',
+          `הבא בתור: ${warehouse.describeRow(next)}`,
+        ].join('\n'),
+        {
+          reply_markup: inlineKeyboard([
+            [button('המוצר הבא ברשימה', 'prod:next')],
+            [webAppButton('בחר מהרשימה', `${config.publicBaseUrl}/warehouse`)],
+          ]),
+        }
+      );
+      break;
+    }
+
+    case 'next': {
+      const pending = await google.pendingRows();
+
+      if (!pending.length) {
+        await sendMessage(chatId, 'הרשימה ריקה. אין מוצרים שממתינים מהמחסן.');
+        break;
+      }
+
+      await products.startFromWarehouseRow(chatId, userId, pending[0]);
+      break;
+    }
 
     case 'ready':
       await products.buildDraft(chatId, userId);
@@ -509,9 +663,7 @@ async function handleSettingsCallback(chatId, userId, action, rest) {
       await settings.showCompetitors(chatId);
       break;
     }
-    case 'users': await settings.showUsers(chatId); break;
-    case 'adduser': await settings.promptForUser(chatId, userId); break;
-    case 'rmuser': await settings.removeUser(chatId, rest[0]); break;
+    case 'users': await access.showUsers(chatId); break;
     case 'log': await settings.showLog(chatId); break;
     case 'undo': await settings.undoLast(chatId, userId); break;
   }
@@ -532,12 +684,21 @@ app.post('/telegram/webhook', async (req, res) => {
 
   if (!from) return;
 
-  if (!isAllowed(from.id)) {
-    await warnOwnerAboutStranger(from);
-    return;
-  }
-
   try {
+    const role = await access.roleOf(from.id);
+
+    if (!role) {
+      const chatId = update.message?.chat.id || update.callback_query?.message.chat.id;
+      if (chatId) await access.handleStranger(chatId, from);
+      return;
+    }
+
+    if (role === access.ROLE.warehouse) {
+      if (update.message) await handleWarehouseMessage(update.message);
+      else if (update.callback_query) await handleWarehouseCallback(update.callback_query);
+      return;
+    }
+
     if (update.message) await handleMessage(update.message);
     else if (update.callback_query) await handleCallback(update.callback_query);
   } catch (error) {
@@ -623,6 +784,149 @@ app.post('/api/product/:draftId', async (req, res) => {
   } catch (error) {
     console.error('שמירת מוצר נכשלה:', error.message);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// --- רשימת המחסן ---
+
+app.get('/warehouse', (req, res) => {
+  res.type('html').send(warehouseHtml);
+});
+
+// רק בעלים. הזהות מגיעה מהחתימה של טלגרם, לא מפרמטר בכתובת.
+function ownerFromInitData(initData) {
+  const user = verifyInitData(initData);
+  if (!user || !access.isOwner(user.id)) return null;
+  return user;
+}
+
+app.get('/api/warehouse/list', async (req, res) => {
+  if (!ownerFromInitData(req.query.initData)) return res.sendStatus(401);
+
+  try {
+    const rows = await google.pendingRows();
+
+    res.json({
+      rows: rows.map((row) => ({
+        id: row.cells[google.COL.id] || '',
+        date: row.cells[google.COL.date] || '',
+        who: row.cells[google.COL.who] || '',
+        description: row.cells[google.COL.description] || '',
+        quantity: row.cells[google.COL.quantity] || '',
+        minPrice: row.cells[google.COL.minPrice] || '',
+        photoCount: Number(row.cells[google.COL.photoCount] || 0),
+      })),
+    });
+  } catch (error) {
+    console.error('טעינת רשימת המחסן נכשלה:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/warehouse/pick', async (req, res) => {
+  const user = ownerFromInitData(req.body?.initData);
+  if (!user) return res.sendStatus(401);
+
+  try {
+    const row = await google.findRow(req.body.id);
+    if (!row) return res.status(404).json({ error: 'השורה לא נמצאה' });
+
+    res.json({ ok: true });
+
+    await products.startFromWarehouseRow(user.id, user.id, row);
+  } catch (error) {
+    console.error('פתיחת מוצר מהרשימה נכשלה:', error.message);
+    if (!res.headersSent) res.status(500).json({ error: error.message });
+  }
+});
+
+// תמונות ממוזערות לרשימה. הקובץ נמשך מטלגרם בצד השרת,
+// כדי שהטוקן של הבוט לא ייצא החוצה בכתובת.
+app.get('/warehouse/photo/:id/:index', async (req, res) => {
+  try {
+    const row = await google.findRow(req.params.id);
+    if (!row) return res.sendStatus(404);
+
+    const fileIds = warehouse.rowFileIds(row);
+    const fileId = fileIds[Number(req.params.index) || 0];
+    if (!fileId) return res.sendStatus(404);
+
+    const file = await getFile(fileId);
+    const upstream = await fetch(fileUrl(file.file_path));
+    if (!upstream.ok) return res.sendStatus(502);
+
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+
+    res.set('Content-Type', upstream.headers.get('content-type') || 'image/jpeg');
+    res.set('Cache-Control', 'private, max-age=600');
+    res.send(buffer);
+  } catch (error) {
+    console.error('הגשת תמונה מהמחסן נכשלה:', error.message);
+    res.sendStatus(500);
+  }
+});
+
+// --- חיבור לגוגל ---
+
+function page(title, body) {
+  return `<!doctype html><html lang="he" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;700;900&display=swap" rel="stylesheet">
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f4f4f6;color:#0c090d;
+font-family:Heebo,sans-serif;padding:24px;text-align:center}
+.card{background:#fff;border-radius:16px;padding:32px 28px;max-width:420px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+h1{font-size:22px;font-weight:900;margin:0 0 10px}p{color:#5c5c63;margin:0 0 6px;line-height:1.6}
+a{color:#0142ff}
+@media(prefers-color-scheme:dark){body{background:#0e0e11;color:#f3f3f5}.card{background:#1a1a1f;box-shadow:none}
+p{color:#a8a8b2}a{color:#5b8bff}}</style></head><body><div class="card">${body}</div></body></html>`;
+}
+
+app.get('/google/connect', async (req, res) => {
+  try {
+    const url = await google.startAuth();
+    res.redirect(url);
+  } catch (error) {
+    res.status(500).type('html').send(page('שגיאה', `<h1>לא הצלחתי</h1><p>${error.message}</p>`));
+  }
+});
+
+app.get('/google/callback', async (req, res) => {
+  const { code, state, error: denied } = req.query;
+
+  if (denied) {
+    return res.type('html').send(page('בוטל', '<h1>החיבור בוטל</h1><p>אפשר לנסות שוב מתוך הבוט.</p>'));
+  }
+
+  if (!code) {
+    return res.status(400).type('html').send(page('שגיאה', '<h1>חסר קוד</h1><p>נסה שוב מתוך הבוט.</p>'));
+  }
+
+  try {
+    const result = await google.finishAuth(String(code), String(state || ''));
+
+    if (config.telegram.ownerId) {
+      await sendMessage(
+        config.telegram.ownerId,
+        [
+          '✅ <b>גוגל מחובר</b>',
+          '',
+          result.account ? `חשבון: ${result.account}` : '',
+          '',
+          result.sheetUrl ? `<a href="${result.sheetUrl}">הגיליון</a>` : '',
+          result.folderUrl ? `<a href="${result.folderUrl}">תיקיית התמונות</a>` : '',
+        ].filter(Boolean).join('\n')
+      ).catch(() => {});
+    }
+
+    res.type('html').send(
+      page(
+        'מחובר',
+        '<h1>גוגל מחובר</h1><p>יצרתי לך תיקייה וגיליון בדרייב.<p>אפשר לחזור לטלגרם.</p>'
+      )
+    );
+  } catch (error) {
+    console.error('חיבור גוגל נכשל:', error.message);
+    res.status(400).type('html').send(page('שגיאה', `<h1>החיבור נכשל</h1><p>${error.message}</p>`));
   }
 });
 

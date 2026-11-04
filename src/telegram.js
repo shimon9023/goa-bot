@@ -1,5 +1,7 @@
 // עטיפה דקה סביב ה-API של טלגרם. הכול עובר דרך fetch, בלי ספרייה חיצונית.
 
+import { createHmac } from 'node:crypto';
+
 import { config } from './config.js';
 
 const API = `https://api.telegram.org/bot${config.telegram.token}`;
@@ -87,6 +89,40 @@ export function setWebhook(url, { dropPending = false } = {}) {
     // מחיקת התור בעלייה הייתה מוחקת בדיוק אותה, אז כברירת מחדל לא מוחקים.
     drop_pending_updates: dropPending,
   });
+}
+
+// --- אימות מיני אפליקציה ---
+// טלגרם חותם את הנתונים שהוא מעביר למיני אפליקציה. בלי הבדיקה הזו
+// כל אחד שיודע את הכתובת יכול לקרוא לנתיבים שלה.
+
+export function verifyInitData(initData) {
+  if (!initData) return null;
+
+  const params = new URLSearchParams(initData);
+  const hash = params.get('hash');
+  if (!hash) return null;
+
+  params.delete('hash');
+
+  const checkString = [...params.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, value]) => `${key}=${value}`)
+    .join('\n');
+
+  const secret = createHmac('sha256', 'WebAppData').update(config.telegram.token).digest();
+  const expected = createHmac('sha256', secret).update(checkString).digest('hex');
+
+  if (expected !== hash) return null;
+
+  // חתימה ישנה מדי היא חשודה
+  const authDate = Number(params.get('auth_date') || 0);
+  if (!authDate || Date.now() / 1000 - authDate > 24 * 60 * 60) return null;
+
+  try {
+    return JSON.parse(params.get('user') || 'null');
+  } catch {
+    return null;
+  }
 }
 
 // --- בניית מקלדות ---

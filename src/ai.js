@@ -672,6 +672,41 @@ export async function generateProductImage(imageUrl, { kind = 'product', clothin
   };
 }
 
+// --- פענוח הערה של עובד מחסן ---
+// העובד כותב משפט אחד בלי מבנה קבוע, למשל "ג'וינט רולר שקוף, 24 יחידות, 12 שקל".
+// מוציאים ממנו את התיאור, הכמות והמחיר שעל המדבקה.
+
+export async function readWarehouseNote(text) {
+  const result = await callClaudeJson({
+    label: 'הערת מחסן',
+    maxTokens: 400,
+    system: `אתה מפרק הערה שכתב עובד מחסן בחנות מוצרי עישון.
+ההערה קצרה, בעברית מדוברת, ולפעמים חלקית.
+
+description: שם המוצר והתיאור, בלי הכמות ובלי המחיר. אם אין, החזר מחרוזת ריקה.
+quantity: מספר היחידות שיש במלאי, כמספר בלבד. אם לא נאמר, החזר מחרוזת ריקה.
+minPrice: המחיר בשקלים שמופיע על המדבקה של המוצר, כמספר בלבד. אם לא נאמר, החזר מחרוזת ריקה.
+
+אל תנחש. מה שלא נאמר במפורש נשאר ריק.
+אם נאמר רק מספר אחד ולא ברור אם הוא כמות או מחיר, שים אותו ב-quantity.`,
+    messages: [
+      {
+        role: 'user',
+        content: `ההערה: ${text}
+
+החזר JSON:
+{ "description": "", "quantity": "", "minPrice": "" }`,
+      },
+    ],
+  });
+
+  return {
+    description: String(result.description || '').trim(),
+    quantity: String(result.quantity ?? '').trim(),
+    minPrice: String(result.minPrice ?? '').trim(),
+  };
+}
+
 // --- שמירת משוב על תמונות, לשיפור הפרומפטים ---
 
 export async function saveImageFeedback({ productName, beforeUrl, note, afterUrl }) {

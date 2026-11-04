@@ -43,6 +43,7 @@ export async function showMenu(chatId) {
       [button('התראות', 'set:alerts')],
       [button('מתחרים', 'set:competitors')],
       [button('משתמשים', 'set:users')],
+      [button('חיבור לגוגל', 'goog:status')],
       [button('יומן פעולות', 'set:log')],
       [button('בטל פעולה אחרונה', 'set:undo')],
     ]),
@@ -158,80 +159,8 @@ export async function saveCompetitor(chatId, userId, text) {
 }
 
 // --- משתמשים ---
-
-export async function showUsers(chatId) {
-  const { data } = await supabase.from('bot_users').select('*').order('created_at');
-  const users = data || [];
-
-  if (!users.length) {
-    await sendMessage(chatId, 'רק אתה מוגדר כרגע.', {
-      reply_markup: inlineKeyboard([[button('הוסף משתמש', 'set:adduser')]]),
-    });
-    return;
-  }
-
-  const lines = ['<b>משתמשים</b>', ''];
-  const rows = [];
-
-  for (const user of users) {
-    lines.push(`${user.name || user.user_id} · ${(user.areas || []).join(', ') || 'בלי הרשאות'}`);
-    rows.push([button(`הסר ${user.name || user.user_id}`, `set:rmuser:${user.user_id}`)]);
-  }
-
-  rows.push([button('הוסף משתמש', 'set:adduser')]);
-
-  await sendMessage(chatId, lines.join('\n'), { reply_markup: inlineKeyboard(rows) });
-}
-
-export async function promptForUser(chatId, userId) {
-  await db.setState(userId, { module: 'settings', awaiting: 'user' });
-
-  await sendMessage(
-    chatId,
-    [
-      'שלח בשורה אחת: מזהה טלגרם, שם, ואזורים מופרדים בפסיק.',
-      'האזורים האפשריים: מלאי, מוצר חדש, הזמנות, בדיקות.',
-      '',
-      'לדוגמה:',
-      '<code>123456789, יוסי, מלאי, הזמנות</code>',
-      '',
-      'את המזהה שלו מקבלים מהבוט @userinfobot.',
-    ].join('\n')
-  );
-}
-
-export async function saveUser(chatId, userId, text) {
-  const parts = text.split(',').map((p) => p.trim()).filter(Boolean);
-
-  if (parts.length < 2) {
-    await sendMessage(chatId, 'צריך לפחות מזהה ושם. נסה שוב.');
-    return;
-  }
-
-  const [telegramId, name, ...areas] = parts;
-
-  await supabase
-    .from('bot_users')
-    .upsert({ user_id: telegramId, name, areas }, { onConflict: 'user_id' });
-
-  await db.clearState(userId);
-
-  await sendMessage(
-    chatId,
-    [
-      `${name} נוסף.`,
-      '',
-      'שים לב: צריך גם להוסיף את המזהה שלו למשתנה TELEGRAM_ALLOWED_USER_IDS בהגדרות השרת,',
-      'אחרת הבוט לא יענה לו.',
-    ].join('\n'),
-    { reply_markup: mainKeyboard }
-  );
-}
-
-export async function removeUser(chatId, telegramId) {
-  await supabase.from('bot_users').delete().eq('user_id', telegramId);
-  await showUsers(chatId);
-}
+// הניהול עבר ל-access.js: משתמש חדש פותח את הבוט, ושמעון מאשר אותו
+// בכפתור. אין יותר הוספה ידנית עם מזהים ואזורים.
 
 // --- יומן וביטול ---
 
