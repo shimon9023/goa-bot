@@ -28,9 +28,7 @@ export async function soldOutReport(chatId) {
   }
 
   if (!outOfStock.length) {
-    await sendMessage(chatId, 'אין מוצרים שנמכרו ואזלו. הכול זמין.', {
-      reply_markup: mainKeyboard,
-    });
+    await sendMessage(chatId, 'אין מוצרים שנמכרו ואזלו. הכול זמין.');
     return;
   }
 
@@ -43,7 +41,7 @@ export async function soldOutReport(chatId) {
     ...outOfStock.map((item) => `${item.name} · נמכרו ${item.quantity}`),
   ];
 
-  await sendMessage(chatId, lines.join('\n'), { reply_markup: mainKeyboard });
+  await sendMessage(chatId, lines.join('\n'));
 }
 
 // --- טרנזילה ---

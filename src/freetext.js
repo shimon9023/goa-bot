@@ -41,8 +41,7 @@ export async function handle(chatId, userId, text) {
   if (intent.action === 'unknown' || intent.confidence < 0.5) {
     await sendMessage(
       chatId,
-      intent.question || 'לא הבנתי מה לעשות. אפשר לנסח אחרת, או להשתמש בתפריט.',
-      { reply_markup: mainKeyboard }
+      intent.question || 'לא הבנתי מה לעשות. אפשר לנסח אחרת, או להשתמש בתפריט.'
     );
     return;
   }
@@ -81,7 +80,7 @@ export async function handle(chatId, userId, text) {
       }));
 
       const answer = await ai.answerOrderQuestion(text, slim);
-      await sendMessage(chatId, answer, { reply_markup: mainKeyboard });
+      await sendMessage(chatId, answer);
       return;
     }
   }
@@ -116,8 +115,7 @@ export async function handle(chatId, userId, text) {
           : 'לא זיהיתי על איזה מוצר מדובר.',
         '',
         'אפשר לכתוב את השם כמו שהוא מופיע באתר, או חלק ממנו.',
-      ].join('\n'),
-      { reply_markup: mainKeyboard }
+      ].join('\n')
     );
     return;
   }
@@ -151,7 +149,7 @@ export async function confirm(chatId, userId) {
   const intent = state?.pendingIntent;
 
   if (!intent) {
-    await sendMessage(chatId, 'אין פעולה שממתינה לאישור.', { reply_markup: mainKeyboard });
+    await sendMessage(chatId, 'אין פעולה שממתינה לאישור.');
     return;
   }
 
@@ -205,5 +203,5 @@ export async function pickProduct(chatId, userId, productId) {
 
 export async function cancel(chatId, userId) {
   await db.clearState(userId);
-  await sendMessage(chatId, 'בוטל, שום דבר לא השתנה.', { reply_markup: mainKeyboard });
+  await sendMessage(chatId, 'בוטל, שום דבר לא השתנה.');
 }

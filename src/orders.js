@@ -8,7 +8,6 @@ import {
   inlineKeyboard,
   button,
   webAppButton,
-  mainKeyboard,
 } from './telegram.js';
 
 const PENDING_STATUSES = 'processing,on-hold';
@@ -35,9 +34,7 @@ export async function showPendingOrders(chatId) {
   const orders = await woo.getOrders({ status: PENDING_STATUSES, per_page: 30 });
 
   if (!orders.length) {
-    await sendMessage(chatId, 'אין הזמנות שממתינות לאריזה. הכול נקי.', {
-      reply_markup: mainKeyboard,
-    });
+    await sendMessage(chatId, 'אין הזמנות שממתינות לאריזה. הכול נקי.');
     return;
   }
 

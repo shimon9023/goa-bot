@@ -50,6 +50,31 @@ export async function showMenu(chatId) {
   });
 }
 
+// מסך מצומצם למי שקיבל הרשאת התראות בלבד.
+// רק ספים והדלקה או כיבוי של התראות. בלי משתמשים, בלי חיבורים, בלי יומן.
+export async function showAlertsOnly(chatId) {
+  const settings = await db.getSettings();
+
+  await sendMessage(
+    chatId,
+    [
+      '<b>הגדרות התראות</b>',
+      '',
+      `לא נארזה: ${settings.unpackedHours} שעות`,
+      `תזכורת: כל ${settings.reminderEveryHours} שעות`,
+      `הזמנה כפולה: ${settings.duplicateWindowHours} שעות`,
+      `הזמנה חריגה: ${settings.largeOrderAmount} ₪`,
+      `שעות שקטות: ${settings.quietHoursStart}:00 עד ${settings.quietHoursEnd}:00`,
+    ].join('\n'),
+    {
+      reply_markup: inlineKeyboard([
+        [button('שנה ספים', 'set:thresholds')],
+        [button('אילו התראות פעילות', 'set:alerts')],
+      ]),
+    }
+  );
+}
+
 // --- ספים ---
 
 export async function showThresholds(chatId) {
@@ -78,9 +103,7 @@ export async function saveValue(chatId, userId, key, text) {
   await db.updateSettings({ [key]: value });
   await db.clearState(userId);
 
-  await sendMessage(chatId, `${LABELS[key]} עודכן ל-${value}.`, {
-    reply_markup: mainKeyboard,
-  });
+  await sendMessage(chatId, `${LABELS[key]} עודכן ל-${value}.`);
 }
 
 // --- הפעלה וכיבוי של התראות ---
@@ -155,7 +178,7 @@ export async function saveCompetitor(chatId, userId, text) {
   await competitors.addCompetitor({ name, siteUrl, categories });
   await db.clearState(userId);
 
-  await sendMessage(chatId, `${name} נוסף לרשימת המתחרים.`, { reply_markup: mainKeyboard });
+  await sendMessage(chatId, `${name} נוסף לרשימת המתחרים.`);
 }
 
 // --- משתמשים ---
@@ -168,7 +191,7 @@ export async function showLog(chatId) {
   const actions = await db.getRecentActions(15);
 
   if (!actions.length) {
-    await sendMessage(chatId, 'היומן ריק.', { reply_markup: mainKeyboard });
+    await sendMessage(chatId, 'היומן ריק.');
     return;
   }
 
@@ -187,22 +210,21 @@ export async function showLog(chatId) {
     lines.push(`${when} · ${action.action} · ${action.target || ''}${undone}`);
   }
 
-  await sendMessage(chatId, lines.join('\n'), { reply_markup: mainKeyboard });
+  await sendMessage(chatId, lines.join('\n'));
 }
 
 export async function undoLast(chatId, userId) {
   const action = await db.getLastAction(userId);
 
   if (!action) {
-    await sendMessage(chatId, 'אין פעולה לבטל.', { reply_markup: mainKeyboard });
+    await sendMessage(chatId, 'אין פעולה לבטל.');
     return;
   }
 
   if (action.action !== 'stock_update') {
     await sendMessage(
       chatId,
-      `הפעולה האחרונה היא "${action.action}", ואותה אני לא יודע לבטל אוטומטית.\nאפשר לבטל רק עדכוני מלאי.`,
-      { reply_markup: mainKeyboard }
+      `הפעולה האחרונה היא "${action.action}", ואותה אני לא יודע לבטל אוטומטית.\nאפשר לבטל רק עדכוני מלאי.`
     );
     return;
   }
@@ -222,7 +244,5 @@ export async function undoLast(chatId, userId) {
 
   await db.markUndone(action.id);
 
-  await sendMessage(chatId, 'הפעולה בוטלה והמלאי הוחזר למה שהיה.', {
-    reply_markup: mainKeyboard,
-  });
+  await sendMessage(chatId, 'הפעולה בוטלה והמלאי הוחזר למה שהיה.');
 }

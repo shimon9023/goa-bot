@@ -8,7 +8,6 @@ import {
   editMessageText,
   inlineKeyboard,
   button,
-  mainKeyboard,
 } from './telegram.js';
 
 // --- עזרי תצוגה ---
@@ -53,8 +52,7 @@ export async function handleProductSearch(chatId, userId, term) {
         `לא מצאתי כלום שמתאים ל"${term}".`,
         '',
         'אפשר לנסות חלק מהשם, או שם של מותג.',
-      ].join('\n'),
-      { reply_markup: mainKeyboard }
+      ].join('\n')
     );
     return;
   }
@@ -306,7 +304,6 @@ export async function applyBulkChanges(chatId, userId) {
     chatId,
     failed.length
       ? `עודכנו ${done} מוצרים. ${failed.length} נכשלו:\n${failed.join('\n')}`
-      : `עודכנו ${done} מוצרים.`,
-    { reply_markup: mainKeyboard }
+      : `עודכנו ${done} מוצרים.`
   );
 }

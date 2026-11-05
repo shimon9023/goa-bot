@@ -18,7 +18,6 @@ import {
   inlineKeyboard,
   button,
   webAppButton,
-  mainKeyboard,
   getFile,
   fileUrl,
 } from './telegram.js';
@@ -612,8 +611,7 @@ export async function publish(chatId, userId, draftId, status) {
       created.permalink,
       warehouseNote,
       metaWarning,
-    ].filter(Boolean).join('\n'),
-    { reply_markup: mainKeyboard }
+    ].filter(Boolean).join('\n')
   );
 }
 

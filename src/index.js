@@ -24,7 +24,6 @@ import { startSchedulers, runAllChecks } from './alerts.js';
 import {
   sendMessage,
   answerCallbackQuery,
-  mainKeyboard,
   inlineKeyboard,
   button,
   webAppButton,
@@ -43,63 +42,68 @@ const warehouseHtml = readFileSync(join(__dirname, 'miniapp', 'warehouse.html'),
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
-// --- זרימת עובד המחסן ---
-// זה כל מה שהוא רואה. אין לו תפריט, אין לו הגדרות, ואין לו גישה לאתר.
+// --- זרימת ההוספה לרשימה ---
+// מי שנמצא במודול הזה, כל מה שהוא שולח נדבק למוצר הפתוח,
+// עד שהוא לוחץ שמור או עובר לכפתור אחר בתפריט.
 
-async function handleWarehouseMessage(message) {
+async function handleIntakeMessage(message) {
   const chatId = message.chat.id;
   const userId = message.from.id;
   const text = (message.text || '').trim();
 
   if (message.photo?.length) {
     await warehouse.addPhotos(chatId, userId, message.photo);
-    return;
+    return true;
   }
 
   if (message.voice || message.audio) {
     await warehouse.addVoice(chatId, userId, message.voice || message.audio);
-    return;
-  }
-
-  if (text === '/start' || text === 'התחל מההתחלה') {
-    await warehouse.welcome(chatId, userId);
-    return;
+    return true;
   }
 
   if (text) {
     await warehouse.addNote(chatId, userId, text);
-    return;
+    return true;
   }
 
   await sendMessage(chatId, 'אני יודע לקבל תמונות, טקסט והקלטות.');
+  return true;
 }
 
-async function handleWarehouseCallback(query) {
-  const chatId = query.message.chat.id;
-  const userId = query.from.id;
-
-  await answerCallbackQuery(query.id).catch(() => {});
-
-  if ((query.data || '') !== 'wh:save') return;
-
+async function saveIntakeItem(chatId, userId, from) {
   const user = await db.getUser(userId);
-  const result = await warehouse.save(chatId, userId, user?.name || access.displayName(query.from));
+  const name = user?.name || access.displayName(from);
+
+  const result = await warehouse.save(chatId, userId, name);
 
   // אם תמונות לא עלו לדרייב, שמעון צריך לדעת
-  if (result?.failed && config.telegram.ownerId) {
+  if (result?.failed && config.telegram.ownerId && String(config.telegram.ownerId) !== String(userId)) {
     await sendMessage(
       config.telegram.ownerId,
-      `⚠️ במוצר "${result.description || result.id}" מהמחסן, ${result.failed} תמונות לא עלו לדרייב.`
+      `⚠️ במוצר "${result.description || result.id}" מהרשימה, ${result.failed} תמונות לא עלו לדרייב.`
     ).catch(() => {});
   }
 }
 
 // --- טיפול בהודעות טקסט ---
 
-async function handleMessage(message) {
+async function handleMessage(message, areas) {
   const chatId = message.chat.id;
   const userId = message.from.id;
   const text = (message.text || '').trim();
+
+  // כפתור בתפריט תמיד מנצח, גם באמצע איסוף מוצר לרשימה
+  const isMenuPress = access.AREAS.some((area) => area.button === text)
+    || text === 'הגדרות' || text === 'התחל מההתחלה' || text === '/start';
+
+  if (!isMenuPress) {
+    const state = await db.getState(userId);
+
+    if (state?.module === 'warehouse') {
+      await handleIntakeMessage(message);
+      return;
+    }
+  }
 
   // תמונה שנשלחה בזמן בניית מוצר
   if (message.photo?.length) {
@@ -127,9 +131,7 @@ async function handleMessage(message) {
       const result = await checks.compareWithWoo(transactions);
 
       await db.clearState(userId);
-      await sendMessage(chatId, checks.formatComparison(result), {
-        reply_markup: mainKeyboard,
-      });
+      await sendMessage(chatId, checks.formatComparison(result));
       return;
     }
   }
@@ -179,29 +181,25 @@ async function handleMessage(message) {
 
   if (!text) return;
 
-  // כפתורי התפריט הקבוע
-  switch (text) {
-    case '/start':
-    case 'התחל מההתחלה':
-      await db.clearState(userId);
-      await sendMessage(
-        chatId,
-        'מה נעשה?',
-        { reply_markup: mainKeyboard }
-      );
-      return;
+  // כפתורי התפריט הקבוע, כל אחד מותנה בהרשאה
+  const menu = {
+    'הוספה לרשימת העלאה': ['intake', async () => {
+      await warehouse.welcome(chatId, userId);
+    }],
 
-    case 'ניהול מלאי':
+    'ניהול מלאי': ['inventory', async () => {
       await db.setState(userId, { module: 'inventory', awaiting: 'product' });
       await sendMessage(chatId, 'איזה מוצר? אפשר לכתוב את השם או לשלוח הקלטה.');
-      return;
+    }],
 
-    case 'הזמנות':
+    'הזמנות': ['orders', async () => {
       await db.clearState(userId);
       await orders.showPendingOrders(chatId);
-      return;
+    }],
 
-    case 'מוצר חדש': {
+    'מוצר חדש': ['products', async () => {
+      await db.clearState(userId);
+
       const rows = [
         [button('מוצר חדש', 'prod:new')],
         [button('וריאציה למוצר קיים', 'prod:variation')],
@@ -216,29 +214,53 @@ async function handleMessage(message) {
           }
         }
       } catch (error) {
-        console.error('קריאת רשימת המחסן נכשלה:', error.message);
+        console.error('קריאת רשימת ההעלאה נכשלה:', error.message);
       }
 
       await sendMessage(chatId, 'מה נוסיף?', { reply_markup: inlineKeyboard(rows) });
+    }],
+
+    'בדיקות': ['checks', async () => {
+      await db.clearState(userId);
+      await checks.showChecksMenu(chatId);
+    }],
+
+    'הגדרות התראות': ['alerts', async () => {
+      await db.clearState(userId);
+      await settings.showAlertsOnly(chatId);
+    }],
+
+    'הגדרות': ['settings', async () => {
+      await db.clearState(userId);
+      await settings.showMenu(chatId);
+    }],
+  };
+
+  if (text === '/start' || text === 'התחל מההתחלה') {
+    await db.clearState(userId);
+    await sendMessage(chatId, 'מה נעשה?', { reply_markup: access.keyboard(areas) });
+    return;
+  }
+
+  const entry = menu[text];
+
+  if (entry) {
+    const [area, run] = entry;
+
+    if (!access.can(areas, area)) {
+      await sendMessage(chatId, 'אין לך הרשאה לזה.');
       return;
     }
 
-    case 'בדיקות':
-      await db.clearState(userId);
-      await checks.showChecksMenu(chatId);
-      return;
-
-    case 'הגדרות':
-      await db.clearState(userId);
-      await settings.showMenu(chatId);
-      return;
+    await run();
+    return;
   }
 
-  await handleTextInput(chatId, userId, text);
+  await handleTextInput(chatId, userId, text, areas);
 }
 
 // טקסט חופשי, מתפרש לפי המצב שבו המשתמש נמצא
-async function handleTextInput(chatId, userId, text) {
+async function handleTextInput(chatId, userId, text, areas = []) {
   const state = await db.getState(userId);
 
   // באמצע בניית מוצר
@@ -302,6 +324,15 @@ async function handleTextInput(chatId, userId, text) {
     return;
   }
 
+  // כתיבה חופשית נוגעת במלאי ובהזמנות, אז היא פתוחה רק למי שמורשה שם.
+  // בלי זה מי שיש לו רק הוספה לרשימה היה יכול לשנות מלאי בהודעה חופשית.
+  if (!access.can(areas, 'inventory') && !access.can(areas, 'orders')) {
+    await sendMessage(chatId, 'לא הבנתי. תשתמש בכפתורים שבתפריט.', {
+      reply_markup: access.keyboard(areas),
+    });
+    return;
+  }
+
   // ברירת מחדל: קלוד מבין מה רוצים ומציג לאישור לפני שנוגעים באתר
   try {
     await freetext.handle(chatId, userId, text);
@@ -315,7 +346,19 @@ async function handleTextInput(chatId, userId, text) {
 
 // --- טיפול בלחיצות על כפתורים ---
 
-async function handleCallback(query) {
+// לכל קבוצת כפתורים האזור שהיא דורשת. מי שאין לו, הלחיצה לא עושה כלום.
+const CALLBACK_AREA = {
+  wh: 'intake',
+  inv: 'inventory',
+  prod: 'products',
+  check: 'checks',
+  set: 'settings',
+  acc: 'settings',
+  goog: 'settings',
+  ft: 'inventory',
+};
+
+async function handleCallback(query, areas) {
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
   const userId = query.from.id;
@@ -326,6 +369,23 @@ async function handleCallback(query) {
   // עונים לטלגרם מיד. יש חלון של 15 שניות בלבד,
   // ופעולות כמו יצירת תמונה לוקחות יותר מזה.
   await answerCallbackQuery(query.id).catch(() => {});
+
+  const required = CALLBACK_AREA[scope];
+
+  if (required && !access.can(areas, required)) {
+    // חוץ ממסך ההתראות המצומצם, שפתוח גם למי שיש לו רק אותו
+    const alertsOnly = scope === 'set' && ['thresholds', 'edit', 'alerts', 'toggle'].includes(action);
+
+    if (!(alertsOnly && access.can(areas, 'alerts'))) {
+      await sendMessage(chatId, 'אין לך הרשאה לזה.');
+      return;
+    }
+  }
+
+  if (scope === 'wh' && action === 'save') {
+    await saveIntakeItem(chatId, userId, query.from);
+    return;
+  }
 
   if (scope === 'alert' && action === 'mute') {
     await db.muteOrder(rest[0]);
@@ -342,6 +402,9 @@ async function handleCallback(query) {
     if (action === 'ok') await access.approve(chatId, rest[0]);
     else if (action === 'no') await access.reject(chatId, rest[0]);
     else if (action === 'rm') await access.remove(chatId, rest[0]);
+    else if (action === 'edit') await access.showPermissions(chatId, rest[0]);
+    else if (action === 'area') await access.toggleArea(chatId, rest[0], rest[1], messageId);
+    else if (action === 'done') await access.finishPermissions(chatId, rest[0], messageId);
     return;
   }
 
@@ -443,7 +506,7 @@ async function handleCallback(query) {
         await inventory.applyBulkChanges(chatId, userId);
       } else {
         await db.clearState(userId);
-        await sendMessage(chatId, 'בוטל, שום דבר לא השתנה.', { reply_markup: mainKeyboard });
+        await sendMessage(chatId, 'בוטל, שום דבר לא השתנה.');
       }
       break;
   }
@@ -685,22 +748,16 @@ app.post('/telegram/webhook', async (req, res) => {
   if (!from) return;
 
   try {
-    const role = await access.roleOf(from.id);
+    const areas = await access.areasOf(from.id);
 
-    if (!role) {
+    if (!areas) {
       const chatId = update.message?.chat.id || update.callback_query?.message.chat.id;
       if (chatId) await access.handleStranger(chatId, from);
       return;
     }
 
-    if (role === access.ROLE.warehouse) {
-      if (update.message) await handleWarehouseMessage(update.message);
-      else if (update.callback_query) await handleWarehouseCallback(update.callback_query);
-      return;
-    }
-
-    if (update.message) await handleMessage(update.message);
-    else if (update.callback_query) await handleCallback(update.callback_query);
+    if (update.message) await handleMessage(update.message, areas);
+    else if (update.callback_query) await handleCallback(update.callback_query, areas);
   } catch (error) {
     console.error('שגיאה בטיפול בעדכון:', error);
 

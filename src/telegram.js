@@ -127,16 +127,40 @@ export function verifyInitData(initData) {
 
 // --- בניית מקלדות ---
 
-// המקלדת הקבועה שמופיעה מתחת לשדה ההקלדה
-export const mainKeyboard = {
-  keyboard: [
-    [{ text: 'ניהול מלאי' }, { text: 'מוצר חדש' }],
-    [{ text: 'הזמנות' }, { text: 'בדיקות' }],
-    [{ text: 'הגדרות' }, { text: 'התחל מההתחלה' }],
-  ],
-  resize_keyboard: true,
-  is_persistent: true,
-};
+// המקלדת הקבועה שמופיעה מתחת לשדה ההקלדה.
+// נבנית לפי ההרשאות, כך שכל אחד רואה רק את מה שמותר לו.
+export function keyboardFor(buttons, { settings = false } = {}) {
+  const rows = [];
+
+  // שניים בשורה, חוץ מכפתור ארוך שמקבל שורה לעצמו
+  let pending = null;
+
+  for (const text of buttons) {
+    if (text.length > 14) {
+      if (pending) { rows.push([{ text: pending }]); pending = null; }
+      rows.push([{ text }]);
+      continue;
+    }
+
+    if (pending) { rows.push([{ text: pending }, { text }]); pending = null; }
+    else pending = text;
+  }
+
+  if (pending) rows.push([{ text: pending }]);
+
+  const last = [];
+  if (settings) last.push({ text: 'הגדרות' });
+  last.push({ text: 'התחל מההתחלה' });
+  rows.push(last);
+
+  return { keyboard: rows, resize_keyboard: true, is_persistent: true };
+}
+
+// המקלדת של הבעלים. נשארת כברירת מחדל במקומות שלא מכירים את ההרשאות.
+export const mainKeyboard = keyboardFor(
+  ['ניהול מלאי', 'מוצר חדש', 'הזמנות', 'בדיקות', 'הוספה לרשימת העלאה'],
+  { settings: true }
+);
 
 // כפתורים מתחת להודעה מסוימת
 export function inlineKeyboard(rows) {

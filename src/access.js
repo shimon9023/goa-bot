@@ -1,18 +1,26 @@
 // מי מורשה להשתמש בבוט, ומה מותר לו.
 //
 // שמעון והמשתמשים שברשימת השרת הם בעלים: הם רואים הכול.
-// עובד מחסן רואה רק את קליטת המוצרים.
+// לכל שאר המשתמשים יש רשימת אזורים, והתפריט הראשי נבנה ממנה.
 // מי שלא מוכר מגיע לשמעון לאישור, ועד שהוא מאשר הבוט לא עונה לו.
 
 import { config } from './config.js';
 import * as db from './db.js';
-import * as warehouse from './warehouse.js';
-import { sendMessage, inlineKeyboard, button } from './telegram.js';
+import { sendMessage, editMessageText, inlineKeyboard, button, keyboardFor } from './telegram.js';
 
-export const ROLE = {
-  owner: 'owner',
-  warehouse: 'warehouse',
-};
+// האזורים שאפשר לחלק. הסדר כאן הוא הסדר בתפריט ובמסך ההרשאות.
+// "הגדרות" המלאות לא נמצאות כאן בכוונה: משם אפשר לנתק את גוגל
+// ולאשר משתמשים, וזה נשאר רק לבעלים.
+export const AREAS = [
+  { key: 'intake', button: 'הוספה לרשימת העלאה' },
+  { key: 'inventory', button: 'ניהול מלאי' },
+  { key: 'orders', button: 'הזמנות' },
+  { key: 'products', button: 'מוצר חדש' },
+  { key: 'checks', button: 'בדיקות' },
+  { key: 'alerts', button: 'הגדרות התראות' },
+];
+
+const AREA_KEYS = AREAS.map((area) => area.key);
 
 export function isOwner(userId) {
   const list = config.telegram.allowedUserIds;
@@ -20,15 +28,30 @@ export function isOwner(userId) {
   return list.includes(String(userId));
 }
 
-export async function roleOf(userId) {
-  if (isOwner(userId)) return ROLE.owner;
+// מחזיר את האזורים של המשתמש, או null אם אין לו גישה בכלל.
+// לבעלים מחזיר את הכול ועוד הגדרות מלאות.
+export async function areasOf(userId) {
+  if (isOwner(userId)) return [...AREA_KEYS, 'settings'];
 
   const user = await db.getUser(userId);
-  const areas = user?.areas || [];
+  const areas = (user?.areas || []).filter((area) => AREA_KEYS.includes(area));
 
-  if (areas.includes(ROLE.warehouse)) return ROLE.warehouse;
+  return areas.length ? areas : null;
+}
 
-  return null;
+export function can(areas, key) {
+  return Array.isArray(areas) && areas.includes(key);
+}
+
+export function keyboard(areas) {
+  const full = can(areas, 'settings');
+
+  const buttons = AREAS
+    // למי שיש הגדרות מלאות אין טעם בכפתור נפרד להתראות, זה בתוכו
+    .filter((area) => can(areas, area.key) && !(full && area.key === 'alerts'))
+    .map((area) => area.button);
+
+  return keyboardFor(buttons, { settings: full });
 }
 
 export function displayName(user) {
@@ -55,11 +78,7 @@ export async function handleStranger(chatId, user) {
 
   await sendMessage(
     chatId,
-    [
-      'שלום. הבוט הזה סגור.',
-      '',
-      'שלחתי בקשת גישה. תקבל הודעה כשהיא תאושר.',
-    ].join('\n')
+    ['שלום. הבוט הזה סגור.', '', 'שלחתי בקשת גישה. תקבל הודעה כשהיא תאושר.'].join('\n')
   );
 
   if (!config.telegram.ownerId) return;
@@ -72,12 +91,10 @@ export async function handleStranger(chatId, user) {
       `שם: ${name}`,
       user.username ? `שם משתמש: @${user.username}` : '',
       `מזהה: <code>${user.id}</code>`,
-      '',
-      'אישור ייתן לו גישה לקליטת מוצרים מהמחסן בלבד.',
     ].filter(Boolean).join('\n'),
     {
       reply_markup: inlineKeyboard([
-        [button('אשר כעובד מחסן', `acc:ok:${user.id}`), button('דחה', `acc:no:${user.id}`)],
+        [button('אשר ובחר הרשאות', `acc:ok:${user.id}`), button('דחה', `acc:no:${user.id}`)],
       ]),
     }
   );
@@ -86,16 +103,10 @@ export async function handleStranger(chatId, user) {
 export async function approve(ownerChatId, userId) {
   const user = await db.getUser(userId);
 
-  await db.upsertUser({ userId, name: user?.name, areas: [ROLE.warehouse] });
+  // מאושר, אבל עדיין בלי שום אזור. הוא לא רואה כלום עד שבוחרים לו.
+  await db.upsertUser({ userId, name: user?.name, areas: [] });
 
-  await sendMessage(ownerChatId, `✅ ${user?.name || userId} אושר כעובד מחסן.`);
-
-  try {
-    await sendMessage(userId, 'הגישה שלך אושרה.');
-    await warehouse.welcome(userId, userId);
-  } catch (error) {
-    console.error('לא הצלחתי להודיע למשתמש שאושר:', error.message);
-  }
+  await showPermissions(ownerChatId, userId);
 }
 
 export async function reject(ownerChatId, userId) {
@@ -106,7 +117,93 @@ export async function reject(ownerChatId, userId) {
   await sendMessage(ownerChatId, `הבקשה של ${user?.name || userId} נדחתה.`);
 }
 
-// --- ניהול מתוך ההגדרות ---
+// --- מסך ההרשאות ---
+
+function permissionRows(userId, areas) {
+  const rows = AREAS.map((area) => [
+    button(
+      `${areas.includes(area.key) ? '✅' : '⬜️'}  ${area.button}`,
+      `acc:area:${userId}:${area.key}`
+    ),
+  ]);
+
+  rows.push([button('סיום', `acc:done:${userId}`)]);
+
+  return rows;
+}
+
+function permissionText(user, areas) {
+  const name = user?.name || user?.user_id || 'משתמש';
+
+  return [
+    `<b>הרשאות של ${name}</b>`,
+    '',
+    areas.length
+      ? 'הכפתורים המסומנים יופיעו אצלו בתפריט.'
+      : 'אין לו כרגע שום הרשאה, אז הבוט לא עונה לו.',
+    '',
+    'לחיצה מדליקה או מכבה.',
+  ].join('\n');
+}
+
+export async function showPermissions(chatId, userId, messageId = null) {
+  const user = await db.getUser(userId);
+  const areas = (user?.areas || []).filter((area) => AREA_KEYS.includes(area));
+
+  const text = permissionText(user, areas);
+  const markup = inlineKeyboard(permissionRows(userId, areas));
+
+  if (messageId) {
+    await editMessageText(chatId, messageId, text, { reply_markup: markup });
+    return;
+  }
+
+  await sendMessage(chatId, text, { reply_markup: markup });
+}
+
+export async function toggleArea(chatId, userId, areaKey, messageId) {
+  if (!AREA_KEYS.includes(areaKey)) return;
+
+  const user = await db.getUser(userId);
+  const current = (user?.areas || []).filter((area) => AREA_KEYS.includes(area));
+
+  const next = current.includes(areaKey)
+    ? current.filter((area) => area !== areaKey)
+    : [...current, areaKey];
+
+  await db.upsertUser({ userId, name: user?.name, areas: next });
+  await showPermissions(chatId, userId, messageId);
+}
+
+// סוגר את המסך ומודיע למשתמש מה הוא קיבל
+export async function finishPermissions(chatId, userId, messageId) {
+  const user = await db.getUser(userId);
+  const areas = (user?.areas || []).filter((area) => AREA_KEYS.includes(area));
+
+  const names = AREAS.filter((area) => areas.includes(area.key)).map((area) => area.button);
+
+  await editMessageText(
+    chatId,
+    messageId,
+    [
+      `<b>${user?.name || userId}</b>`,
+      '',
+      names.length ? names.map((name) => `• ${name}`).join('\n') : 'בלי הרשאות. הבוט לא יענה לו.',
+    ].join('\n')
+  );
+
+  if (!areas.length) return;
+
+  try {
+    await sendMessage(userId, 'הגישה שלך אושרה. הנה מה שאתה יכול לעשות:', {
+      reply_markup: keyboard(areas),
+    });
+  } catch (error) {
+    console.error('לא הצלחתי להודיע למשתמש שאושר:', error.message);
+  }
+}
+
+// --- רשימת המשתמשים ---
 
 export async function showUsers(chatId) {
   const users = await db.listUsers();
@@ -116,25 +213,36 @@ export async function showUsers(chatId) {
     return;
   }
 
-  const label = (areas) => {
-    if (areas?.includes(ROLE.warehouse)) return 'עובד מחסן';
-    if (areas?.includes('pending')) return 'ממתין לאישור';
-    if (areas?.includes('rejected')) return 'נדחה';
-    return 'בלי הרשאות';
-  };
+  const rows = [];
+  const lines = ['<b>משתמשים</b>', ''];
 
-  const rows = users.map((user) => [
-    button(`${user.name || user.user_id} · ${label(user.areas)}`, 'noop'),
-    button('הסר', `acc:rm:${user.user_id}`),
-  ]);
+  for (const user of users) {
+    const areas = user.areas || [];
+    const granted = AREAS.filter((area) => areas.includes(area.key)).map((area) => area.button);
 
-  const pending = users.filter((user) => user.areas?.includes('pending'));
+    let state = granted.join(', ');
+    if (areas.includes('pending')) state = 'ממתין לאישור';
+    else if (areas.includes('rejected')) state = 'נדחה';
+    else if (!granted.length) state = 'בלי הרשאות';
 
-  for (const user of pending) {
-    rows.push([button(`אשר את ${user.name || user.user_id}`, `acc:ok:${user.user_id}`)]);
+    lines.push(`${user.name || user.user_id} · ${state}`);
+
+    if (areas.includes('pending')) {
+      rows.push([
+        button(`אשר את ${user.name || user.user_id}`, `acc:ok:${user.user_id}`),
+        button('דחה', `acc:no:${user.user_id}`),
+      ]);
+    } else if (!areas.includes('rejected')) {
+      rows.push([
+        button(`הרשאות של ${user.name || user.user_id}`, `acc:edit:${user.user_id}`),
+        button('הסר', `acc:rm:${user.user_id}`),
+      ]);
+    } else {
+      rows.push([button(`הסר את ${user.name || user.user_id}`, `acc:rm:${user.user_id}`)]);
+    }
   }
 
-  await sendMessage(chatId, '<b>משתמשים</b>', { reply_markup: inlineKeyboard(rows) });
+  await sendMessage(chatId, lines.join('\n'), { reply_markup: inlineKeyboard(rows) });
 }
 
 export async function remove(chatId, userId) {
