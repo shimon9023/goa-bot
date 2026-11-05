@@ -23,6 +23,7 @@
     --warn: #9a6700;
     --warn-soft: rgba(250, 188, 60, .2);
     --danger: #c92a2a;
+    --ok: #1a7f37;
     --r-card: 16px;
     --r-ctl: 12px;
     --ease: cubic-bezier(.32, .72, 0, 1);
@@ -43,6 +44,7 @@
       --warn: #fabc3c;
       --warn-soft: rgba(250, 188, 60, .14);
       --danger: #ff6b6b;
+      --ok: #4ac26b;
     }
   }
 
@@ -50,7 +52,7 @@
 
   body {
     margin: 0;
-    padding: 18px 16px calc(96px + env(safe-area-inset-bottom));
+    padding: 18px 16px calc(104px + env(safe-area-inset-bottom));
     background: var(--bg);
     color: var(--text);
     font-family: Heebo, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -73,160 +75,193 @@
 
   input[type="text"], textarea {
     width: 100%;
-    padding: 13px 14px;
-    background: var(--surface);
-    border: none;
-    box-shadow: 0 0 0 1px var(--line);
-    border-radius: var(--r-ctl);
+    padding: 11px 13px;
+    font: inherit;
     color: var(--text);
-    font-family: inherit;
-    font-size: 16px;
-    line-height: 1.55;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-ctl);
+    outline: none;
     resize: vertical;
-    transition: box-shadow .3s var(--ease);
+    transition: border-color .18s var(--ease), box-shadow .18s var(--ease);
   }
 
   input[type="text"]:focus, textarea:focus {
-    outline: none;
-    box-shadow: 0 0 0 2px var(--accent);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
   }
 
-  textarea.one { min-height: 62px; }
-  textarea.short { min-height: 84px; }
-  textarea.long { min-height: 200px; }
+  textarea.one { min-height: 52px; }
+  textarea.short { min-height: 78px; }
+  textarea.long { min-height: 190px; }
 
-  .count {
-    font-size: 12px;
-    color: var(--text-3);
-    margin-top: 5px;
-    text-align: left;
-    font-variant-numeric: tabular-nums;
-  }
-  .count.over { color: var(--danger); font-weight: 500; }
-  .count.good { color: var(--accent); }
+  .hint, .count { font-size: 12px; color: var(--text-3); margin-top: 5px; }
+  .count.good { color: var(--ok); }
+  .count.over { color: var(--danger); }
 
-  .hint { font-size: 13px; color: var(--text-3); margin-top: 5px; }
-
-  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
-
-  .chip {
-    padding: 8px 14px;
+  /* רשימה נגללת בתוך ריבוע, מדורגת לפי היררכיה */
+  .picker {
+    max-height: 230px;
+    overflow-y: auto;
     background: var(--surface);
-    box-shadow: 0 0 0 1px var(--line);
-    border-radius: 999px;
-    font-size: 14px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: background .28s var(--ease), color .28s var(--ease),
-                box-shadow .28s var(--ease), transform .28s var(--ease);
-    touch-action: manipulation;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r-ctl);
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
   }
 
-  .chip.pressed { transform: scale(.955); }
-  .chip.on { background: var(--accent); color: #fff; box-shadow: none; }
+  .opt {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 9px 12px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--line);
+    transition: background .14s var(--ease);
+  }
+
+  .opt:last-child { border-bottom: 0; }
+  .opt.pressed { background: var(--surface-2); }
+  .opt.on { background: var(--accent-soft); }
+
+  .box {
+    flex: 0 0 auto;
+    width: 19px;
+    height: 19px;
+    border-radius: 5px;
+    border: 1.5px solid var(--line-strong);
+    display: grid;
+    place-items: center;
+    font-size: 12px;
+    color: #fff;
+    background: transparent;
+  }
+
+  .opt.on .box { background: var(--accent); border-color: var(--accent); }
+  .opt .name { font-size: 15px; }
+  .opt.lvl1 .name { padding-inline-start: 16px; color: var(--text-2); }
+  .opt.lvl2 .name { padding-inline-start: 32px; color: var(--text-2); font-size: 14px; }
+
+  .search {
+    width: 100%;
+    padding: 9px 12px;
+    font: inherit;
+    font-size: 15px;
+    color: var(--text);
+    background: var(--surface-2);
+    border: 0;
+    border-bottom: 1px solid var(--line);
+    outline: none;
+    position: sticky;
+    top: 0;
+    z-index: 2;
+  }
+
+  .picked { margin-top: 7px; font-size: 13px; color: var(--text-2); }
 
   .card {
     background: var(--surface);
+    border: 1px solid var(--line);
     border-radius: var(--r-card);
-    padding: 15px 16px;
+    padding: 14px;
     margin-bottom: 20px;
-    box-shadow: 0 1px 2px rgba(12, 9, 13, .05), 0 0 0 1px var(--line);
   }
 
-  .card h2 {
-    margin: 0 0 11px;
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: .05em;
-    color: var(--text-3);
-  }
+  .card h2 { margin: 0 0 10px; font-size: 13px; font-weight: 700; color: var(--text-3); letter-spacing: .05em; }
 
-  .comp {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 14px;
-    padding: 9px 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .comp:last-of-type { border-bottom: none; }
-  .comp a { color: var(--accent); text-decoration: none; font-weight: 500; }
-  .comp .range { font-variant-numeric: tabular-nums; font-weight: 500; }
+  .comp { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; font-size: 15px; }
+  .comp a { color: var(--accent); text-decoration: none; }
+  .comp .range { font-weight: 700; }
   .comp .none { color: var(--text-3); font-size: 14px; }
+  .footnote { margin-top: 9px; font-size: 12px; color: var(--text-3); }
 
-  .footnote {
-    margin-top: 12px;
-    padding-top: 12px;
-    border-top: 1px solid var(--line);
-    font-size: 13px;
-    color: var(--text-3);
-  }
+  .price-row { display: flex; align-items: center; gap: 9px; }
+  .price-row input { flex: 1; font-size: 19px; font-weight: 700; }
+  .price-row .unit { font-size: 19px; color: var(--text-3); }
 
-  .angle {
-    background: var(--accent-soft);
+  .notes, .problems {
+    background: var(--warn-soft);
     border-radius: var(--r-ctl);
     padding: 11px 13px;
     font-size: 14px;
-    line-height: 1.45;
-    margin-top: 10px;
-  }
-
-  .price-row { display: flex; align-items: center; gap: 10px; }
-  .price-row input { flex: 1; }
-  .price-row .unit { font-size: 18px; color: var(--text-3); font-weight: 500; }
-
-  .notes {
-    background: var(--warn-soft);
-    border-radius: var(--r-card);
-    padding: 13px 15px;
-    margin-bottom: 20px;
-    font-size: 14px;
-    line-height: 1.5;
     color: var(--warn);
+    margin-bottom: 20px;
   }
-
-  .notes strong { display: block; margin-bottom: 4px; font-size: 12px; letter-spacing: .05em; }
+  .problems strong, .notes strong { display: block; margin-bottom: 5px; }
 
   .bottom {
     position: fixed;
     inset-inline: 0;
     bottom: 0;
-    z-index: 20;
     padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
-    background: color-mix(in srgb, var(--bg) 76%, transparent);
-    backdrop-filter: blur(20px) saturate(180%);
-    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    background: color-mix(in srgb, var(--bg) 84%, transparent);
+    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    border-top: 1px solid var(--line);
     display: flex;
-    gap: 10px;
+    flex-direction: column;
+    gap: 8px;
   }
+
+  .bottom .row { display: flex; gap: 8px; }
+  .bottom .row > * { flex: 1; }
 
   button.act {
-    flex: 1;
-    padding: 15px;
-    border: none;
-    border-radius: 14px;
-    font-size: 16px;
+    width: 100%;
+    padding: 14px;
+    font: inherit;
     font-weight: 700;
-    letter-spacing: -.01em;
-    font-family: inherit;
+    font-size: 16px;
+    border: 0;
+    border-radius: var(--r-ctl);
     cursor: pointer;
-    transition: transform .3s var(--ease), opacity .3s var(--ease);
-    touch-action: manipulation;
+    transition: transform .22s var(--ease), opacity .18s var(--ease);
   }
 
-  button.act.pressed { transform: scale(.982); }
+  button.act.pressed { transform: scale(.975); }
   button.act:disabled { opacity: .5; }
+  button.act.live { background: var(--accent); color: #fff; }
+  button.act.draft { background: var(--surface); color: var(--text); border: 1px solid var(--line-strong); }
+  button.act.small { padding: 11px; font-size: 15px; }
 
-  button.draft { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--line-strong); }
-  button.live { background: var(--accent); color: #fff; }
-
-  .state { text-align: center; padding: 64px 20px; color: var(--text-2); }
+  .state { padding: 48px 24px; text-align: center; color: var(--text-3); }
   .state.err { color: var(--danger); }
-  .err-line { color: var(--danger); font-size: 13px; margin-top: 6px; }
+
+  /* --- תצוגה כמו האתר --- */
+  .pv-gallery { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; margin-bottom: 14px; scroll-snap-type: x mandatory; }
+  .pv-gallery img {
+    flex: 0 0 78%;
+    aspect-ratio: 1;
+    object-fit: contain;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: var(--r-card);
+    scroll-snap-align: center;
+  }
+  .pv-title { font-size: 23px; font-weight: 900; letter-spacing: -.02em; margin: 0 0 4px; }
+  .pv-sub { font-size: 15px; color: var(--text-2); margin: 0 0 12px; }
+  .pv-price { font-size: 26px; font-weight: 900; margin-bottom: 14px; }
+  .pv-price small { font-size: 16px; font-weight: 500; color: var(--text-3); }
+  .pv-attr { font-size: 12px; font-weight: 700; color: var(--text-3); margin-bottom: 7px; letter-spacing: .05em; }
+  .pv-vars { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 16px; }
+  .pv-var { padding: 8px 13px; border: 1px solid var(--line-strong); border-radius: 999px; font-size: 14px; background: var(--surface); }
+  .pv-var.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 700; }
+  .pv-buy { width: 100%; padding: 15px; background: var(--accent); color: #fff; border: 0; border-radius: var(--r-ctl); font: inherit; font-weight: 700; font-size: 17px; margin-bottom: 20px; }
+  .pv-desc { font-size: 15px; line-height: 1.75; }
+  .pv-desc p { margin: 0 0 11px; }
+  .pv-serp { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); padding: 13px; margin-bottom: 14px; }
+  .pv-serp .url { font-size: 12px; color: var(--text-3); margin-bottom: 3px; }
+  .pv-serp .t { font-size: 17px; color: #1a0dab; margin-bottom: 3px; line-height: 1.3; }
+  .pv-serp .d { font-size: 13px; color: var(--text-2); line-height: 1.5; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .pv-serp .t { color: #8ab4f8; } }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 18px; }
+  .tab { flex: 1; padding: 9px; text-align: center; font-size: 14px; font-weight: 700; border-radius: var(--r-ctl); background: var(--surface-2); color: var(--text-2); cursor: pointer; }
+  .tab.on { background: var(--accent); color: #fff; }
 
   @media (prefers-reduced-motion: reduce) {
     * { transition-duration: .01ms !important; }
-    .chip.pressed, button.act.pressed { transform: none; }
+    .opt.pressed, button.act.pressed { transform: none; }
   }
 
   @media (prefers-reduced-transparency: reduce) {
@@ -245,7 +280,11 @@
 
   const draftId = location.pathname.split('/').filter(Boolean).pop();
   const root = document.getElementById('root');
+
   let data = null, allCategories = [], allTags = [];
+  let picked = { cat: [], tag: [] };
+  let view = new URLSearchParams(location.search).get('view') === 'preview' ? 'preview' : 'edit';
+  let metaProblems = [];
 
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -265,15 +304,86 @@
     el.addEventListener('pointerleave', () => release(false));
   }
 
-  function chips(list, selected, group) {
-    return list.map((item) => {
-      const on = selected.includes(item.name) ? ' on' : '';
-      return `<div class="chip${on}" data-group="${group}" data-name="${esc(item.name)}">${esc(item.name)}</div>`;
+  // --- רשימת קטגוריות מדורגת ---
+  // ווקומרס מחזיר רשימה שטוחה עם מזהה הורה. כאן מסדרים אותה לעץ
+  // כדי שאפשר יהיה לראות מה יושב מתחת למה.
+  function hierarchy(list) {
+    const byParent = new Map();
+    for (const item of list) {
+      const key = item.parent || 0;
+      if (!byParent.has(key)) byParent.set(key, []);
+      byParent.get(key).push(item);
+    }
+
+    const out = [];
+    const walk = (parent, level) => {
+      const children = (byParent.get(parent) || []).sort((a, b) => a.name.localeCompare(b.name, 'he'));
+      for (const child of children) {
+        out.push({ ...child, level: Math.min(level, 2) });
+        walk(child.id, level + 1);
+      }
+    };
+
+    walk(0, 0);
+
+    // קטגוריה שההורה שלה נמחק עדיין צריכה להופיע
+    const seen = new Set(out.map((item) => item.id));
+    for (const item of list) if (!seen.has(item.id)) out.push({ ...item, level: 0 });
+
+    return out;
+  }
+
+  function pickerHtml(items, group, withSearch) {
+    const rows = items.map((item) => {
+      const on = picked[group].includes(item.name) ? ' on' : '';
+      return `<div class="opt lvl${item.level || 0}${on}" data-group="${group}" data-name="${esc(item.name)}">
+        <div class="box">✓</div><div class="name">${esc(item.name)}</div></div>`;
     }).join('');
+
+    return `<div class="picker" id="picker-${group}">
+      ${withSearch ? `<input class="search" type="text" placeholder="חפש" data-for="${group}" autocomplete="off">` : ''}
+      <div class="opts">${rows}</div>
+    </div>
+    <div class="picked" id="picked-${group}"></div>`;
+  }
+
+  function refreshPicked(group) {
+    const el = document.getElementById('picked-' + group);
+    if (!el) return;
+    el.textContent = picked[group].length ? picked[group].join(' · ') : 'לא נבחר כלום';
+  }
+
+  function wirePicker(group, items) {
+    const box = document.getElementById('picker-' + group);
+    if (!box) return;
+
+    box.querySelectorAll('.opt').forEach((el) => {
+      pressable(el, () => {
+        const name = el.dataset.name;
+        const i = picked[group].indexOf(name);
+        if (i === -1) picked[group].push(name); else picked[group].splice(i, 1);
+        el.classList.toggle('on');
+        refreshPicked(group);
+        tg?.HapticFeedback?.selectionChanged();
+      });
+    });
+
+    const search = box.querySelector('.search');
+    if (search) {
+      search.addEventListener('input', () => {
+        const term = search.value.trim();
+        box.querySelectorAll('.opt').forEach((el) => {
+          el.style.display = !term || el.dataset.name.includes(term) ? '' : 'none';
+        });
+      });
+    }
+
+    refreshPicked(group);
   }
 
   function competitorBlock() {
     const r = data.research;
+
     if (!r || !r.found) {
       return `<section class="card"><h2>מחירים אצל המתחרים</h2>
         <div class="comp"><span class="none">${esc(r?.message || 'לא נמצא אצל המתחרים')}</span></div></section>`;
@@ -281,18 +391,21 @@
 
     const rows = r.results.map((c) => {
       if (c.status === 'ok') {
-        const range = c.min === c.max ? `${c.min} ₪` : `${c.min}-${c.max} ₪`;
-        return `<div class="comp"><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a><span class="range">${range}</span></div>`;
+        return `<div class="comp"><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a><span class="range">${c.price} ₪</span></div>`;
       }
-      return `<div class="comp"><span>${esc(c.name)}</span><span class="none">${c.status === 'not_found' ? 'לא נמצא' : 'לא הצלחתי לבדוק'}</span></div>`;
+      return `<div class="comp"><span>${esc(c.name)}</span><span class="none">${c.status === 'not_found' ? 'אין לו את המוצר' : 'לא הצלחתי לבדוק'}</span></div>`;
     }).join('');
 
     return `<section class="card"><h2>מחירים אצל המתחרים</h2>${rows}
       <div class="footnote">המחיר נקבע על ידך בלבד.</div></section>`;
   }
 
-  function render() {
+  // --- מסך העריכה ---
+  function renderEdit() {
     const c = data;
+    const cats = hierarchy(allCategories);
+    const tags = allTags.map((t) => ({ ...t, level: 0 }));
+    const hasVariants = (c.variants || []).filter((v) => v.value).length >= 2;
 
     root.innerHTML = `
       <div class="field">
@@ -302,24 +415,93 @@
 
       <div class="field">
         <label>קטגוריות</label>
-        <div class="chips" id="cats">${chips(allCategories, c.categories || [], 'cat')}</div>
+        ${pickerHtml(cats, 'cat', true)}
       </div>
 
       <div class="field">
         <label>תגיות</label>
-        <div class="chips" id="tags">${chips(allTags, c.tags || [], 'tag')}</div>
+        ${pickerHtml(tags, 'tag', true)}
       </div>
 
       <div class="field">
         <label for="short">תיאור קצר</label>
         <textarea id="short" class="one">${esc(c.shortDescription)}</textarea>
-        <div class="hint">משפט אחד, עד 15 מילים</div>
+        <div class="hint">כותרת קצרה, שלוש עד שש מילים</div>
       </div>
 
       <div class="field">
         <label for="desc">תיאור מלא</label>
         <textarea id="desc" class="long">${esc(c.description)}</textarea>
       </div>
+
+      ${competitorBlock()}
+
+      <div class="field">
+        <label for="price">מחיר</label>
+        <div class="price-row">
+          <input type="text" id="price" inputmode="decimal" value="${c.priceFromUser ?? ''}" placeholder="לא נקבע">
+          <span class="unit">₪</span>
+        </div>
+      </div>
+
+      ${hasVariants ? '' : `<div class="field">
+        <label for="stock">כמות במלאי</label>
+        <input type="text" id="stock" inputmode="numeric" value="${c.stockQuantity ?? ''}" placeholder="ריק = לא מנהל כמות">
+      </div>`}
+
+      <div class="bottom">
+        <button class="act live" id="save-price">שמור מחיר</button>
+      </div>`;
+
+    wirePicker('cat', cats);
+    wirePicker('tag', tags);
+    pressable(document.getElementById('save-price'), savePrice);
+  }
+
+  // --- מסך הצפייה, כמו האתר במובייל ---
+  function renderPreview() {
+    const c = data;
+    const images = [c.generatedImage, ...(c.extraImages || [])].filter(Boolean);
+    const variants = (c.variants || []).filter((v) => v.value);
+
+    const paragraphs = String(c.description || '')
+      .split(/\n{2,}|\n/)
+      .filter(Boolean)
+      .map((p) => `<p>${esc(p)}</p>`)
+      .join('');
+
+    root.innerHTML = `
+      <div class="tabs">
+        <div class="tab" id="to-edit">עריכה</div>
+        <div class="tab on">תצוגה</div>
+      </div>
+
+      ${images.length ? `<div class="pv-gallery">${images.map((src) => `<img src="${esc(src)}" alt="">`).join('')}</div>` : ''}
+
+      <h1 class="pv-title">${esc(c.name)}</h1>
+      ${c.shortDescription ? `<p class="pv-sub">${esc(c.shortDescription)}</p>` : ''}
+
+      <div class="pv-price">${c.priceFromUser ? `${c.priceFromUser} <small>₪</small>` : '<small>בלי מחיר</small>'}</div>
+
+      ${variants.length ? `
+        <div class="pv-attr">${esc(c.attribute?.name || 'בחר')}</div>
+        <div class="pv-vars">${variants.map((v, i) => `<div class="pv-var${i === 0 ? ' on' : ''}">${esc(v.value)}</div>`).join('')}</div>
+      ` : ''}
+
+      <button class="pv-buy" type="button">הוספה לסל</button>
+
+      <div class="pv-desc">${paragraphs}</div>
+
+      <div class="field" style="margin-top:28px">
+        <label>איך זה ייראה בגוגל</label>
+        <div class="pv-serp">
+          <div class="url">goasmoke.co.il › product</div>
+          <div class="t" id="serp-t">${esc(c.metaTitle)}</div>
+          <div class="d" id="serp-d">${esc(c.metaDescription)}</div>
+        </div>
+      </div>
+
+      ${metaProblems.length ? `<div class="problems"><strong>המטא לא עבר בדיקה</strong>${metaProblems.map(esc).join('<br>')}</div>` : ''}
 
       <div class="field">
         <label for="mtitle">מטא כותרת</label>
@@ -333,95 +515,106 @@
         <div class="count" id="mdesc-count"></div>
       </div>
 
-      ${c.angle ? `<div class="angle">${esc(c.angle)}</div>` : ''}
-
-      ${competitorBlock()}
-
-      <div class="field">
-        <label for="price">מחיר</label>
-        <div class="price-row">
-          <input type="text" id="price" inputmode="decimal" value="${c.priceFromUser ?? ''}" placeholder="לא נקבע">
-          <span class="unit">₪</span>
-        </div>
-      </div>
-
-      <div class="field">
-        <label for="stock">כמות במלאי</label>
-        <input type="text" id="stock" inputmode="numeric" value="${c.stockQuantity ?? ''}" placeholder="ריק = לא מנהל כמות">
-      </div>
-
-      ${c.notes ? `<div class="notes"><strong>דברים שלא הייתי בטוח בהם</strong>${esc(c.notes)}</div>` : ''}
-
       <div class="bottom">
-        <button class="act draft" id="save-draft">שמור כטיוטה</button>
-        <button class="act live" id="publish">פרסם לאוויר</button>
+        <button class="act live" id="pub-draft">פרסום כטיוטה</button>
+        <div class="row">
+          <button class="act draft small" id="pub-live">פרסום לאוויר</button>
+          <button class="act draft small" id="back-edit">חזרה לעריכה</button>
+        </div>
       </div>`;
 
-    root.querySelectorAll('.chip').forEach((el) => {
-      pressable(el, () => {
-        el.classList.toggle('on');
-        tg?.HapticFeedback?.selectionChanged();
-      });
-    });
-
-    // מונים לפי טווחי Yoast
-    [['mtitle', 'mtitle-count', 45, 60], ['mdesc', 'mdesc-count', 130, 160]]
-      .forEach(([inputId, countId, min, max]) => {
+    [['mtitle', 'mtitle-count', 45, 60, 'serp-t'], ['mdesc', 'mdesc-count', 130, 160, 'serp-d']]
+      .forEach(([inputId, countId, min, max, mirrorId]) => {
         const input = document.getElementById(inputId);
         const out = document.getElementById(countId);
+        const mirror = document.getElementById(mirrorId);
+
         const update = () => {
           const n = input.value.length;
           out.textContent = `${n} תווים · היעד ${min} עד ${max}`;
           out.className = n > max ? 'count over' : (n >= min ? 'count good' : 'count');
+          if (mirror) mirror.textContent = input.value;
         };
+
         input.addEventListener('input', update);
         update();
       });
 
-    pressable(document.getElementById('save-draft'), () => submit('draft'));
-    pressable(document.getElementById('publish'), () => submit('publish'));
+    pressable(document.getElementById('pub-draft'), () => submit('draft'));
+    pressable(document.getElementById('pub-live'), () => submit('publish'));
+    pressable(document.getElementById('back-edit'), () => { view = 'edit'; render(); });
+    pressable(document.getElementById('to-edit'), () => { view = 'edit'; render(); });
   }
 
-  function collect() {
-    const picked = (group) =>
-      [...root.querySelectorAll(`.chip.on[data-group="${group}"]`)].map((el) => el.dataset.name);
+  function render() {
+    window.scrollTo(0, 0);
+    if (view === 'preview') renderPreview(); else renderEdit();
+  }
 
-    const price = document.getElementById('price').value.trim();
-    const stock = document.getElementById('stock').value.trim();
+  function collectEdit() {
+    const price = document.getElementById('price')?.value.trim();
+    const stock = document.getElementById('stock')?.value.trim();
 
     return {
       name: document.getElementById('name').value.trim(),
-      categories: picked('cat'),
-      tags: picked('tag'),
+      categories: picked.cat,
+      tags: picked.tag,
       shortDescription: document.getElementById('short').value.trim(),
       description: document.getElementById('desc').value.trim(),
-      metaTitle: document.getElementById('mtitle').value.trim(),
-      metaDescription: document.getElementById('mdesc').value.trim(),
       priceFromUser: price ? Number(price) : null,
-      stockQuantity: stock ? Number(stock) : null,
+      stockQuantity: stock === '' || stock === undefined ? null : Number(stock),
     };
   }
 
-  function showError(fieldId, message) {
-    const field = document.getElementById(fieldId).closest('.field');
-    let line = field.querySelector('.err-line');
-    if (!line) {
-      line = document.createElement('div');
-      line.className = 'err-line';
-      field.appendChild(line);
-    }
-    line.textContent = message;
-    document.getElementById(fieldId).addEventListener('input', () => line.remove(), { once: true });
-  }
-
-  async function submit(status) {
-    const content = collect();
+  async function savePrice() {
+    const content = collectEdit();
 
     if (!content.name) {
-      showError('name', 'צריך שם למוצר');
+      alert('צריך שם למוצר');
       tg?.HapticFeedback?.notificationOccurred('error');
       return;
     }
+
+    if (!content.priceFromUser) {
+      alert('צריך מחיר לפני שממשיכים');
+      tg?.HapticFeedback?.notificationOccurred('error');
+      return;
+    }
+
+    const btn = document.getElementById('save-price');
+    btn.disabled = true;
+    btn.textContent = 'כותב מטא…';
+
+    try {
+      const res = await fetch(`/api/product/${draftId}/price`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, initData: tg?.initData || '' }),
+      });
+
+      if (!res.ok) throw new Error(await res.text());
+
+      const out = await res.json();
+
+      data = { ...data, ...content, metaTitle: out.metaTitle, metaDescription: out.metaDescription };
+      metaProblems = out.problems || [];
+
+      tg?.HapticFeedback?.notificationOccurred('success');
+      view = 'preview';
+      render();
+    } catch {
+      btn.disabled = false;
+      btn.textContent = 'שמור מחיר';
+      tg?.HapticFeedback?.notificationOccurred('error');
+      alert('לא הצלחתי לשמור. נסה שוב.');
+    }
+  }
+
+  async function submit(status) {
+    const content = {
+      metaTitle: document.getElementById('mtitle').value.trim(),
+      metaDescription: document.getElementById('mdesc').value.trim(),
+    };
 
     const buttons = root.querySelectorAll('button.act');
     buttons.forEach((b) => (b.disabled = true));
@@ -440,7 +633,7 @@
     } catch {
       buttons.forEach((b) => (b.disabled = false));
       tg?.HapticFeedback?.notificationOccurred('error');
-      alert('לא הצלחתי לשמור. נסה שוב.');
+      alert('לא הצלחתי לפרסם. נסה שוב.');
     }
   }
 
@@ -450,6 +643,8 @@
       data = payload.content;
       allCategories = payload.categories;
       allTags = payload.tags;
+      picked = { cat: [...(data.categories || [])], tag: [...(data.tags || [])] };
+      metaProblems = data.metaProblems || [];
       render();
     })
     .catch(() => {
