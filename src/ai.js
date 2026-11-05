@@ -219,14 +219,18 @@ export async function writeProductContent({
   categories,
   tags,
   webContext = '',
+  styleExamples = '',
 }) {
   const system = `${DESCRIPTION_RULES}
 
 ---
 
-בנוסף לתיאור המלא, אתה כותב גם תיאור קצר. הכללים שלו:
+## התיאור הקצר
 
-${SHORT_DESCRIPTION_RULES.split('## המשימה: תיאור קצר')[1]}
+התיאור הקצר הוא כותרת קצרה, לא משפט ולא פסקה.
+שלוש עד שש מילים שמזהות את המוצר, בדיוק כמו שאר המוצרים באתר.
+לדוגמה: "מאפרת בעיצוב סופר ביבי", "מארז 20 סיגרלות Villiger Red".
+בלי נקודה בסוף, בלי מחיר, בלי משלוח ובלי סופרלטיבים.
 
 ---
 
@@ -236,7 +240,10 @@ ${categories.map((c) => `- ${c.name}`).join('\n')}
 התגיות הקיימות באתר (מותר לבחור רק מתוכן):
 ${tags.map((t) => `- ${t.name}`).join('\n')}
 
-אל תמציא קטגוריה או תגית חדשה. אם שום דבר לא מתאים, החזר רשימה ריקה.`;
+אל תמציא קטגוריה או תגית חדשה. אם שום דבר לא מתאים, החזר רשימה ריקה.
+בחר את הקטגוריה הספציפית ביותר שמתאימה. אין צורך לבחור גם את הקטגוריה שמעליה.
+
+${styleExamples ? `---\n\n${styleExamples}` : ''}`;
 
   const parts = [
     spokenText ? `מה שמעון אמר על המוצר:\n${spokenText}` : '',
@@ -258,13 +265,18 @@ ${tags.map((t) => `- ${t.name}`).join('\n')}
   "name": "שם המוצר",
   "categories": ["שם קטגוריה קיימת"],
   "tags": ["שם תגית קיימת"],
-  "shortDescription": "משפט אחד בלבד, עד 15 מילים",
+  "shortDescription": "כותרת קצרה, שלוש עד שש מילים, בלי נקודה",
   "description": "תיאור מלא, פסקאות מופרדות בשורה ריקה",
   "priceFromUser": null,
   "productKind": "סוג המוצר במילה או שתיים, למשל חד פעמי, גחלים, נוזל סולט",
   "isBulk": false,
-  "notes": ["עד שלוש הערות קצרות"]
+  "notes": ["עד שלוש הערות קצרות"],
+  "questions": ["שאלות שחייבות תשובה ממנו"]
 }
+
+questions: שאלות אמיתיות שבלי תשובה עליהן המוצר ייצא חסר.
+למשל כמות יחידות במארז שלא נאמרה, או דגם שלא הצלחת לזהות.
+אל תשאל על מחיר, על מטא ועל משלוח. אם אין שאלות, החזר רשימה ריקה.
 
 אם שמעון אמר מחיר, שים אותו ב-priceFromUser כמספר. אם לא אמר, השאר null.
 isBulk הוא true רק אם זה פריט שנקנה בכמות, כמו פאקט ניירות, פילטרים או שקיות ניקוטין.
@@ -406,7 +418,7 @@ export async function describeProductImage(imageUrl) {
 
 // קורא את כל התמונות יחד ומחזיר גם תיאור כללי וגם מה שכתוב על כל אחת.
 // זה מה שמאפשר לזהות מוצר עם וריאציות: 11 תמונות של 11 טעמים.
-export async function describeProductImages(imageUrls) {
+export async function describeProductImages(imageUrls, { attributes = [] } = {}) {
   const urls = imageUrls.slice(0, 14);
 
   const blocks = [];
@@ -415,32 +427,52 @@ export async function describeProductImages(imageUrls) {
     blocks.push(await imageBlock(url));
   }
 
+  // התכונות שכבר קיימות באתר, עם הערכים שלהן.
+  // הבוט חייב לבחור מתוכן ולא להמציא תכונה חדשה.
+  const attributeBlock = attributes.length
+    ? `\nהתכונות שקיימות באתר, ואלה הערכים שכבר יש בכל אחת:\n${attributes
+        .map((attribute) => {
+          const terms = (attribute.terms || []).map((term) => term.name);
+          const shown = terms.slice(0, 40).join(', ');
+          const more = terms.length > 40 ? ` ועוד ${terms.length - 40}` : '';
+          return `- ${attribute.name}: ${shown || 'אין ערכים עדיין'}${more}`;
+        })
+        .join('\n')}\n`
+    : '';
+
   blocks.push({
     type: 'text',
     text: `קיבלת ${urls.length} תמונות.
-
+${attributeBlock}
 החזר JSON:
 {
   "overall": "תיאור המוצר המשותף לכל התמונות",
   "brand": "המותג כפי שכתוב, או null",
   "model": "שם הדגם כפי שכתוב, או null",
   "perImage": [
-    { "index": 1, "label": "מה שכתוב על התמונה הזו שמבדיל אותה, למשל הטעם או הצבע", "certain": true }
+    { "index": 1, "label": "הערך שמבדיל את התמונה הזו, בעברית", "raw": "הטקסט כפי שהוא מופיע בתמונה, או null", "certain": true }
   ],
   "looksLikeVariants": true,
-  "variantAttribute": "איך לקרוא למה שמבדיל ביניהן, למשל טעם או צבע או מידה"
+  "attributeName": "שם התכונה מהרשימה למעלה שמתאימה, בדיוק כפי שהיא כתובה",
+  "attributeReason": "משפט קצר למה בחרת בה"
 }
 
 looksLikeVariants הוא true רק אם אלה אותו מוצר בגרסאות שונות.
 אם כל התמונות הן אותו פריט מזוויות שונות, זה false.
-label הוא הטקסט כפי שהוא מופיע, בלי לתרגם ובלי להמציא.
-אם אי אפשר לקרוא, שים null ו-certain false.`,
+
+label בעברית. אם מה שכתוב על המוצר באנגלית, תרגם לעברית
+והשאר את המקור ב-raw. אם יש ערך קיים באתר שהוא בדיוק אותו דבר, השתמש בו מילה במילה.
+
+certain הוא false בכל מקרה שבו אתה לא קורא את הערך בבירור מהתמונה.
+עדיף לסמן false מאשר לנחש. אל תמציא טעם או צבע שלא רואים.
+
+attributeName חייב להיות אחד מהשמות ברשימה. אם שום תכונה לא מתאימה, החזר null.`,
   });
 
   return callClaudeJson({
     label: 'ניתוח תמונות',
     system: VISION_RULES,
-    maxTokens: 2500,
+    maxTokens: 3000,
     messages: [{ role: 'user', content: blocks }],
   });
 }
@@ -705,6 +737,34 @@ minPrice: המחיר בשקלים שמופיע על המדבקה של המוצר
     quantity: String(result.quantity ?? '').trim(),
     minPrice: String(result.minPrice ?? '').trim(),
   };
+}
+
+// --- סלאגים באנגלית לערכי תכונה חדשים ---
+// ווקומרס יוצר סלאג מקודד ובלתי קריא משם בעברית,
+// אז מבקשים סלאג אנגלי קריא לכל ערך חדש.
+
+export async function englishSlugs(values) {
+  if (!values.length) return {};
+
+  const result = await callClaudeJson({
+    label: 'סלאגים',
+    maxTokens: 600,
+    system: `אתה מייצר סלאג באנגלית לערכי תכונה של חנות מוצרי עישון.
+הסלאג הוא אותיות קטנות באנגלית ומקפים בלבד, בלי רווחים ובלי ניקוד.
+תרגם או תעתק לפי מה שקריא יותר: "אבטיח" הופך ל-watermelon, "ליים מנטה" ל-lime-mint.
+שם מותג נשאר כמו שהוא באנגלית.`,
+    messages: [
+      {
+        role: 'user',
+        content: `הערכים:\n${values.map((value) => `- ${value}`).join('\n')}
+
+החזר JSON שבו כל מפתח הוא הערך בעברית וכל ערך הוא הסלאג:
+{ "אבטיח": "watermelon" }`,
+      },
+    ],
+  });
+
+  return result && typeof result === 'object' ? result : {};
 }
 
 // --- שמירת משוב על תמונות, לשיפור הפרומפטים ---

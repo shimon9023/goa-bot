@@ -11,6 +11,8 @@ import * as competitors from './competitors.js';
 import * as imagestore from './imagestore.js';
 import * as google from './google.js';
 import * as warehouse from './warehouse.js';
+import * as attributes from './attributes.js';
+import * as style from './style.js';
 import { config } from './config.js';
 import {
   sendMessage,
@@ -62,6 +64,21 @@ export async function getDraft(draftId) {
 export async function deleteDraft(draftId) {
   const { error } = await supabase.from('bot_product_drafts').delete().eq('id', draftId);
   if (error) console.error('מחיקת טיוטה נכשלה:', error.message);
+}
+
+// טיוטה אחרונה שנשארה פתוחה, כדי להציע להמשיך ממנה
+export async function openDraftFor(userId) {
+  const { data, error } = await supabase
+    .from('bot_product_drafts')
+    .select('id, content')
+    .eq('user_id', String(userId))
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error || !data) return null;
+
+  return { id: data.id, name: data.content?.name || 'מוצר בלי שם' };
 }
 
 // --- התחלת מוצר חדש ---
@@ -159,21 +176,26 @@ export async function buildDraft(chatId, userId) {
 
   await sendMessage(chatId, 'עובד על זה, זה לוקח כמה שניות.');
 
-  // קוראים את כל התמונות יחד, כדי לזהות גם וריאציות
+  // קוראים את כל התמונות יחד, כדי לזהות גם וריאציות.
+  // נותנים לקלוד את התכונות שכבר קיימות באתר, כדי שיבחר מתוכן.
   let vision = null;
   let imageDescription = '';
 
   if (state.photos?.length) {
     try {
-      const urls = await Promise.all(state.photos.map(resolvePhotoUrl));
-      vision = await ai.describeProductImages(urls);
+      const [urls, siteAttributes] = await Promise.all([
+        Promise.all(state.photos.map(resolvePhotoUrl)),
+        attributes.forPrompt().catch(() => []),
+      ]);
+
+      vision = await ai.describeProductImages(urls, { attributes: siteAttributes });
 
       imageDescription = [
         vision.overall,
         vision.brand ? `מותג: ${vision.brand}` : '',
         vision.model ? `דגם: ${vision.model}` : '',
         vision.looksLikeVariants
-          ? `נראה שזה מוצר אחד ב-${vision.perImage?.length || 0} גרסאות, לפי ${vision.variantAttribute || 'מאפיין'}`
+          ? `נראה שזה מוצר אחד ב-${vision.perImage?.length || 0} גרסאות, לפי ${vision.attributeName || 'מאפיין'}`
           : '',
       ].filter(Boolean).join('\n');
     } catch (error) {
@@ -191,27 +213,28 @@ export async function buildDraft(chatId, userId) {
 
   const [categories, tags] = await Promise.all([woo.getCategories(), woo.getTags()]);
 
+  // דוגמאות כתיבה מהמוצרים הקיימים. קודם מנחשים קטגוריה גסה
+  // מתוך מה שנאמר ומה שנראה, רק כדי למשוך דוגמאות רלוונטיות.
+  let styleExamples = '';
+  try {
+    const guess = guessCategory(categories, `${state.spoken || ''} ${imageDescription}`);
+    const examples = await style.examplesFor(guess, 4);
+    styleExamples = style.asPromptBlock(examples);
+  } catch (error) {
+    console.error('לימוד הסגנון נכשל:', error.message);
+  }
+
   const content = await ai.writeProductContent({
     spokenText: state.spoken,
     imageDescription,
     categories,
     tags,
     webContext,
+    styleExamples,
   });
 
-  // המטא נכתב בקריאה נפרדת, עם כללי ה-SEO של GOA
-  let meta = {};
-  try {
-    meta = await ai.writeMeta({
-      name: content.name,
-      description: content.description,
-      price: content.priceFromUser,
-      productKind: content.productKind,
-      isBulk: content.isBulk,
-    });
-  } catch (error) {
-    console.error('כתיבת המטא נכשלה:', error.message);
-  }
+  // המטא לא נכתב כאן. הוא נכתב אחרי שהמחיר נקבע.
+  const meta = {};
 
   // מחקר מתחרים לפי הקטגוריה הראשונה שנבחרה
   let research = null;
@@ -221,9 +244,19 @@ export async function buildDraft(chatId, userId) {
     console.error('מחקר המתחרים נכשל:', error.message);
   }
 
-  const draftId = randomUUID();
+  const draftId = state.draftId || randomUUID();
 
   const variants = buildVariantPlan(vision, state.photos || []);
+
+  // מצמידים את הוריאציות לתכונה הגלובלית שקלוד בחר
+  let attribute = null;
+  if (variants.length) {
+    try {
+      attribute = await attributes.find(vision?.attributeName);
+    } catch (error) {
+      console.error('איתור התכונה נכשל:', error.message);
+    }
+  }
 
   await saveDraft(
     draftId,
@@ -233,9 +266,13 @@ export async function buildDraft(chatId, userId) {
       ...meta,
       research,
       variants,
-      variantAttribute: vision?.variantAttribute || 'טעם',
+      attribute: attribute
+        ? { id: attribute.id, name: attribute.name, slug: attribute.slug }
+        : null,
+      attributeReason: vision?.attributeReason || '',
       // כשהמוצר הגיע מרשימת המחסן, זוכרים לאיזו שורה לחזור אחרי הפרסום
       warehouse: state.warehouse || null,
+      stockFromUser: state.stockFromUser ?? null,
     },
     state.photos || []
   );
@@ -250,35 +287,85 @@ export async function buildDraft(chatId, userId) {
     warehouse: state.warehouse || null,
   });
 
-  const editorUrl = `${config.publicBaseUrl}/product/${draftId}`;
+  await showSummary(chatId, draftId);
+}
 
-  const notes = Array.isArray(content.notes)
-    ? content.notes
-    : (content.notes ? [content.notes] : []);
+// --- התמצית ---
+// מוצגת אחרי הבנייה וגם אחרי כל תיקון, כדי שתמיד רואים את המצב העדכני.
 
-  const summary = [
-    `<b>${content.name}</b>`,
+export async function showSummary(chatId, draftId) {
+  const draft = await getDraft(draftId);
+
+  if (!draft) {
+    await sendMessage(chatId, 'הטיוטה לא נמצאה.');
+    return;
+  }
+
+  const content = draft.content;
+  const variants = content.variants || [];
+  const uncertain = variants.filter((variant) => !variant.certain);
+
+  const asList = (value) => (Array.isArray(value) ? value : value ? [value] : []);
+  const notes = asList(content.notes);
+  const questions = asList(content.questions);
+
+  const lines = [
+    `<b>${content.name || 'בלי שם'}</b>`,
+    content.shortDescription ? `<i>${content.shortDescription}</i>` : '',
     '',
-    content.shortDescription || '',
-    '',
-    variants.length
-      ? `${variants.length} וריאציות לפי ${vision?.variantAttribute || 'טעם'}`
-      : '',
-    content.priceFromUser
-      ? `מחיר: ${content.priceFromUser} ₪`
-      : 'לא אמרת מחיר.',
-    notes.length ? '' : null,
-    ...notes.slice(0, 3).map((n) => `• ${n}`),
-  ].filter((line) => line !== null && line !== undefined).join('\n');
+  ];
 
-  const rows = [[webAppButton('פתח לעריכה', editorUrl)]];
+  if (content.categories?.length) lines.push(`קטגוריות: ${content.categories.join(', ')}`);
+  if (content.tags?.length) lines.push(`תגיות: ${content.tags.join(', ')}`);
 
-  if (variants.length) rows.push([button(`אשר ${variants.length} וריאציות`, `prod:vars:${draftId}`)]);
+  if (variants.length) {
+    lines.push('');
+    lines.push(
+      content.attribute
+        ? `${variants.length} וריאציות בתכונה "${content.attribute.name}"`
+        : `${variants.length} וריאציות, אבל לא מצאתי תכונה מתאימה באתר`
+    );
 
-  rows.push([button('תקן בהקלטה או בטקסט', `prod:revise:${draftId}`)]);
-  rows.push([button('עבור לתמונות', `prod:images:${draftId}`)]);
+    lines.push(variants.map((v) => (v.certain ? v.value : `${v.value || '?'} ❓`)).join(' · '));
 
-  await sendMessage(chatId, summary, { reply_markup: inlineKeyboard(rows) });
+    if (content.attributeReason) lines.push(`<i>${content.attributeReason}</i>`);
+  }
+
+  lines.push('');
+  lines.push(
+    content.priceFromUser ? `מחיר: ${content.priceFromUser} ₪` : 'מחיר: תקבע בעריכה'
+  );
+
+  if (notes.length) {
+    lines.push('');
+    lines.push(...notes.slice(0, 3).map((note) => `• ${note}`));
+  }
+
+  if (questions.length) {
+    lines.push('');
+    lines.push('<b>שאלות שיש לי</b>');
+    lines.push(...questions.slice(0, 4).map((question) => `❓ ${question}`));
+    lines.push('');
+    lines.push('תענה בכתיבה או בהקלטה, או דלג.');
+  }
+
+  const rows = [];
+
+  // וריאציה שלא קראתי בוודאות חוסמת. חייבים לסגור אותה קודם.
+  if (uncertain.length) {
+    rows.push([button(`${uncertain.length} וריאציות לא ברורות, בוא נסגור`, `prod:ask:${draftId}`)]);
+  }
+
+  rows.push([button('להוסיף או לתקן פרטים', `prod:revise:${draftId}`)]);
+
+  if (questions.length) rows.push([button('אין לי מה להוסיף', `prod:skipq:${draftId}`)]);
+
+  rows.push([button('ייצר תמונות ופתח לעריכה', `prod:go:new:${draftId}`)]);
+  rows.push([button('השתמש בתמונות הקיימות ופתח לעריכה', `prod:go:keep:${draftId}`)]);
+
+  await sendMessage(chatId, lines.filter((line) => line !== null).join('\n'), {
+    reply_markup: inlineKeyboard(rows),
+  });
 }
 
 // --- תכנון וריאציות ---
@@ -292,10 +379,210 @@ function buildVariantPlan(vision, photos) {
   return vision.perImage
     .map((item) => ({
       value: item.label || null,
+      raw: item.raw || null,
       certain: Boolean(item.certain && item.label),
       photo: photos[(item.index || 1) - 1] || null,
     }))
     .filter((v) => v.photo);
+}
+
+// ניחוש גס של הקטגוריה, רק כדי למשוך דוגמאות כתיבה מהאזור הנכון.
+// הקטגוריה האמיתית נבחרת על ידי קלוד בהמשך.
+function guessCategory(categories, text) {
+  const haystack = String(text || '');
+  if (!haystack.trim()) return null;
+
+  // הספציפי מנצח: מעדיפים את השם הארוך ביותר שמופיע בטקסט
+  const hits = categories
+    .filter((category) => category.name && haystack.includes(category.name))
+    .sort((a, b) => b.name.length - a.name.length);
+
+  return hits[0]?.name || null;
+}
+
+// --- סגירת וריאציות שלא נקראו בוודאות ---
+// שולח את התמונה הספציפית ומבקש את הערך. אין ניחושים.
+
+export async function askNextUncertain(chatId, userId, draftId) {
+  const draft = await getDraft(draftId);
+  if (!draft) return sendMessage(chatId, 'הטיוטה לא נמצאה.');
+
+  const variants = draft.content.variants || [];
+  const index = variants.findIndex((variant) => !variant.certain);
+
+  if (index === -1) {
+    await sendMessage(chatId, 'כל הוריאציות ברורות.');
+    await showSummary(chatId, draftId);
+    return;
+  }
+
+  const variant = variants[index];
+  const attributeName = draft.content.attribute?.name || 'הערך';
+
+  await db.setState(userId, {
+    ...(await db.getState(userId)),
+    module: 'product',
+    draftId,
+    awaiting: 'variantValue',
+    variantIndex: index,
+  });
+
+  try {
+    if (variant.photo) {
+      const url = await resolvePhotoUrl(variant.photo);
+      await sendPhoto(chatId, url);
+    }
+  } catch (error) {
+    console.error('שליחת תמונת וריאציה נכשלה:', error.message);
+  }
+
+  await sendMessage(
+    chatId,
+    [
+      `<b>וריאציה ${index + 1} מתוך ${variants.length}</b>`,
+      '',
+      variant.value ? `ניחשתי "${variant.value}" אבל אני לא בטוח.` : 'לא הצלחתי לקרוא מה כתוב.',
+      variant.raw ? `מה שראיתי בתמונה: ${variant.raw}` : '',
+      '',
+      `מה ${attributeName} של התמונה הזו? כתוב או הקלט.`,
+    ].filter(Boolean).join('\n'),
+    { reply_markup: inlineKeyboard([[button('לוותר על הוריאציה הזו', `prod:drop1:${draftId}`)]]) }
+  );
+}
+
+export async function setVariantValue(chatId, userId, draftId, index, value) {
+  const draft = await getDraft(draftId);
+  if (!draft) return sendMessage(chatId, 'הטיוטה לא נמצאה.');
+
+  const variants = [...(draft.content.variants || [])];
+  if (!variants[index]) return askNextUncertain(chatId, userId, draftId);
+
+  variants[index] = { ...variants[index], value: String(value).trim(), certain: true };
+
+  await saveDraft(draftId, draft.user_id, { ...draft.content, variants }, draft.images);
+  await askNextUncertain(chatId, userId, draftId);
+}
+
+export async function dropVariantAt(chatId, userId, draftId, index) {
+  const draft = await getDraft(draftId);
+  if (!draft) return sendMessage(chatId, 'הטיוטה לא נמצאה.');
+
+  const variants = (draft.content.variants || []).filter((_, i) => i !== index);
+
+  await saveDraft(draftId, draft.user_id, { ...draft.content, variants }, draft.images);
+  await askNextUncertain(chatId, userId, draftId);
+}
+
+// --- שאלת המלאי בוריאציות ---
+
+export async function askVariantStock(chatId, userId, draftId) {
+  const draft = await getDraft(draftId);
+  if (!draft) return false;
+
+  const content = draft.content;
+  const variants = content.variants || [];
+  const quantity = content.stockQuantity ?? content.stockFromUser;
+
+  // שואלים רק כשיש וריאציות וגם נאמר מלאי
+  if (variants.length < 2 || quantity === null || quantity === undefined) return false;
+  if (content.stockDecided) return false;
+
+  await sendMessage(
+    chatId,
+    [
+      `אמרת ${quantity} יחידות, ויש ${variants.length} וריאציות.`,
+      '',
+      'איך לנהל את המלאי?',
+    ].join('\n'),
+    {
+      reply_markup: inlineKeyboard([
+        [button(`${quantity} לכל וריאציה`, `prod:stk:each:${draftId}`)],
+        [button(`לחלק את ${quantity} שווה בשווה`, `prod:stk:split:${draftId}`)],
+        [button('בלי ניהול כמות', `prod:stk:none:${draftId}`)],
+      ]),
+    }
+  );
+
+  return true;
+}
+
+export async function applyVariantStock(chatId, userId, draftId, mode) {
+  const draft = await getDraft(draftId);
+  if (!draft) return sendMessage(chatId, 'הטיוטה לא נמצאה.');
+
+  const content = draft.content;
+  const variants = [...(content.variants || [])];
+  const quantity = Number(content.stockQuantity ?? content.stockFromUser ?? 0);
+
+  let updated = variants;
+  let note = '';
+
+  if (mode === 'each') {
+    updated = variants.map((variant) => ({ ...variant, quantity }));
+    note = `${quantity} יחידות לכל וריאציה.`;
+  } else if (mode === 'split') {
+    const base = Math.floor(quantity / variants.length);
+    let left = quantity - base * variants.length;
+
+    updated = variants.map((variant) => {
+      const extra = left > 0 ? 1 : 0;
+      left -= extra;
+      return { ...variant, quantity: base + extra };
+    });
+
+    note = `חולק: ${updated.map((v) => `${v.value} ${v.quantity}`).join(', ')}`;
+  } else {
+    updated = variants.map((variant) => ({ ...variant, quantity: null }));
+    note = 'בלי ניהול כמות. כולן קיימות במלאי.';
+  }
+
+  await saveDraft(
+    draftId,
+    draft.user_id,
+    { ...content, variants: updated, stockDecided: true, stockQuantity: mode === 'none' ? null : content.stockQuantity },
+    draft.images
+  );
+
+  await sendMessage(chatId, note);
+  await showSummary(chatId, draftId);
+}
+
+// --- המעבר לעריכה ---
+// התמונות נוצרות ברקע בזמן שהוא עורך, כדי לא לבזבז את זמנו.
+
+export async function goToEditor(chatId, userId, draftId, mode) {
+  const draft = await getDraft(draftId);
+  if (!draft) return sendMessage(chatId, 'הטיוטה לא נמצאה.');
+
+  // מלאי בוריאציות נסגר לפני שממשיכים
+  if (await askVariantStock(chatId, userId, draftId)) return;
+
+  const editorUrl = `${config.publicBaseUrl}/product/${draftId}`;
+
+  if (mode === 'new') {
+    await sendMessage(
+      chatId,
+      [
+        'מתחיל לייצר את התמונות ברקע.',
+        'אפשר להיכנס לעריכה עכשיו, והן יחכו לך בסוף.',
+      ].join('\n'),
+      { reply_markup: inlineKeyboard([[webAppButton('פתח לעריכה', editorUrl)]]) }
+    );
+
+    // בכוונה בלי await: העריכה לא מחכה לתמונות
+    generateAllImages(chatId, userId, draftId).catch((error) => {
+      console.error('יצירת התמונות ברקע נכשלה:', error.message);
+      sendMessage(chatId, `יצירת התמונות נכשלה: ${error.message}`).catch(() => {});
+    });
+
+    return;
+  }
+
+  await useOriginalImages(draftId);
+
+  await sendMessage(chatId, 'משתמש בתמונות כמו שהן.', {
+    reply_markup: inlineKeyboard([[webAppButton('פתח לעריכה', editorUrl)]]),
+  });
 }
 
 // --- תיקון בשפה חופשית ---
@@ -312,21 +599,20 @@ export async function reviseDraft(chatId, userId, draftId, instruction) {
 
   const revised = await ai.reviseProductContent(draft.content, instruction);
 
-  await saveDraft(draftId, userId, { ...draft.content, ...revised }, draft.images);
+  // תשובה לשאלות סוגרת אותן. מה שנשאר פתוח יוחזר על ידי קלוד.
+  await saveDraft(
+    draftId,
+    userId,
+    { ...draft.content, ...revised, questions: revised.questions || [] },
+    draft.images
+  );
 
-  const editorUrl = `${config.publicBaseUrl}/product/${draftId}`;
-
-  await sendMessage(chatId, `<b>${revised.name}</b>\n\n${revised.shortDescription || ''}`, {
-    reply_markup: inlineKeyboard([
-      [webAppButton('פתח לעריכה', editorUrl)],
-      [button('תקן עוד', `prod:revise:${draftId}`)],
-      [button('עבור לתמונות', `prod:images:${draftId}`)],
-    ]),
-  });
+  await showSummary(chatId, draftId);
 }
 
 // --- שלב התמונות ---
 
+// אין יותר בחירה בין חולצה למכנסיים. הכל מוצרי עישון.
 export async function startImageStep(chatId, userId, draftId) {
   const draft = await getDraft(draftId);
 
@@ -337,16 +623,40 @@ export async function startImageStep(chatId, userId, draftId) {
     return;
   }
 
-  await db.setState(userId, { module: 'product', draftId, awaiting: 'imageKind' });
+  await generateImage(chatId, userId, draftId, 'product');
+}
 
-  await sendMessage(chatId, 'איזה סוג מוצר זה?', {
-    reply_markup: inlineKeyboard([
-      [button('מוצר רגיל', `prod:kind:product:${draftId}`)],
-      [button('חולצה', `prod:kind:shirt:${draftId}`)],
-      [button('מכנסיים', `prod:kind:pants:${draftId}`)],
-      [button('פיג׳מה', `prod:kind:pajama:${draftId}`)],
-    ]),
-  });
+// יצירת כל התמונות, לריצה ברקע בזמן שהוא עורך
+export async function generateAllImages(chatId, userId, draftId) {
+  const draft = await getDraft(draftId);
+  if (!draft?.images?.length) return;
+
+  await generateImage(chatId, userId, draftId, 'product');
+}
+
+// שימוש בתמונות כמו שצולמו, בלי הודעה
+export async function useOriginalImages(draftId) {
+  const draft = await getDraft(draftId);
+  if (!draft) return;
+
+  const urls = await Promise.all((draft.images || []).map(resolvePhotoUrl));
+
+  const variants = (draft.content.variants || []).map((variant, index) => ({
+    ...variant,
+    imageUrl: variant.imageUrl || urls[index] || null,
+  }));
+
+  await saveDraft(
+    draftId,
+    draft.user_id,
+    {
+      ...draft.content,
+      generatedImage: urls[0] || null,
+      extraImages: urls.slice(1),
+      variants,
+    },
+    draft.images
+  );
 }
 
 export async function generateImage(chatId, userId, draftId, kind, correctionHint = '') {
@@ -491,7 +801,28 @@ export async function publish(chatId, userId, draftId, status) {
 
   const variants = (content.variants || []).filter((v) => v.value);
   const isVariable = variants.length >= 2;
-  const attribute = content.variantAttribute || 'טעם';
+
+  // התכונה הגלובלית של האתר. בלעדיה הערכים לא מתחברים לכלום,
+  // אז מוודאים שכל הערכים קיימים בה לפני שיוצרים את המוצר.
+  let attribute = null;
+  const newTerms = [];
+
+  if (isVariable) {
+    attribute = content.attribute?.id ? await attributes.find(content.attribute.name) : null;
+
+    if (attribute) {
+      const ensured = await attributes.ensureTerms(attribute, variants.map((v) => v.value));
+
+      for (const term of ensured) {
+        if (term.created) newTerms.push(term.name);
+        // מיישרים את הערך לשם המדויק שקיים באתר
+        const variant = variants.find((v) => v.value === term.value);
+        if (variant) variant.value = term.name;
+      }
+    }
+  }
+
+  const attributeName = attribute?.name || content.attribute?.name || 'טעם';
 
   const payload = {
     name: content.name,
@@ -518,15 +849,14 @@ export async function publish(chatId, userId, draftId, status) {
   for (const extra of content.extraImages || []) gallery.push({ src: extra });
   if (gallery.length) payload.images = gallery;
 
-  // התכונה שלפיה נבנות הווריאציות
+  // התכונה שלפיה נבנות הווריאציות.
+  // כשיש תכונה גלובלית מעבירים את המזהה שלה, וכך המוצר מתחבר
+  // לאותה תכונה שכל שאר המוצרים באתר משתמשים בה.
   if (isVariable) {
     payload.attributes = [
-      {
-        name: attribute,
-        visible: true,
-        variation: true,
-        options: variants.map((v) => v.value),
-      },
+      attribute
+        ? { id: attribute.id, visible: true, variation: true, options: variants.map((v) => v.value) }
+        : { name: attributeName, visible: true, variation: true, options: variants.map((v) => v.value) },
     ];
   }
 
@@ -539,11 +869,18 @@ export async function publish(chatId, userId, draftId, status) {
   if (isVariable) {
     for (const variant of variants) {
       try {
+        const hasQuantity = variant.quantity !== undefined && variant.quantity !== null;
+
         const fields = {
-          attributes: [{ name: attribute, option: variant.value }],
-          manage_stock: variant.quantity !== undefined && variant.quantity !== null,
-          stock_quantity: variant.quantity ?? null,
-          stock_status: (variant.quantity ?? 1) > 0 ? 'instock' : 'outofstock',
+          attributes: [
+            attribute
+              ? { id: attribute.id, option: variant.value }
+              : { name: attributeName, option: variant.value },
+          ],
+          manage_stock: hasQuantity,
+          stock_quantity: hasQuantity ? variant.quantity : null,
+          // בלי כמות הווריאציה פשוט קיימת במלאי
+          stock_status: hasQuantity && variant.quantity <= 0 ? 'outofstock' : 'instock',
         };
 
         if (content.priceFromUser) fields.regular_price = String(content.priceFromUser);
@@ -636,16 +973,34 @@ export async function startFromWarehouseRow(chatId, userId, row) {
     warehouse: { rowNumber: row.rowNumber, id: row.cells[google.COL.id] || '' },
   });
 
+  // מראים קודם מה יש, ורק אז מתחילים לעבוד.
+  // התמונות עצמן, כדי שיראה מה צולם לפני שהבוט משקיע זמן וכסף.
+  if (photos.length) {
+    try {
+      const urls = await Promise.all(photos.slice(0, 10).map(resolvePhotoUrl));
+
+      for (const [index, url] of urls.entries()) {
+        await sendPhoto(chatId, url, index === 0 ? 'מהרשימה של המחסן' : '');
+      }
+    } catch (error) {
+      console.error('הצגת תמונות מהרשימה נכשלה:', error.message);
+    }
+  }
+
   await sendMessage(
     chatId,
     [
-      '<b>מהרשימה של המחסן</b>',
+      '<b>מהרשימה</b>',
       '',
       warehouse.describeRow(row),
-    ].join('\n')
+      '',
+      photos.length ? `${photos.length} תמונות` : 'בלי תמונות',
+      '',
+      'יש לך מה להוסיף על המוצר? כתוב או הקלט עכשיו.',
+      'אם לא, לחץ התחל.',
+    ].join('\n'),
+    { reply_markup: inlineKeyboard([[button('התחל', 'prod:ready')]]) }
   );
-
-  await buildDraft(chatId, userId);
 }
 
 // --- מסך אישור הווריאציות ---
@@ -658,7 +1013,7 @@ export async function showVariants(chatId, userId, draftId) {
   }
 
   const variants = draft.content.variants || [];
-  const attribute = draft.content.variantAttribute || 'טעם';
+  const attribute = draft.content.attribute?.name || 'טעם';
 
   if (!variants.length) {
     await sendMessage(chatId, 'לא זיהיתי וריאציות במוצר הזה.');

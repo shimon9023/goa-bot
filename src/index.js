@@ -20,6 +20,7 @@ import * as ai from './ai.js';
 import * as google from './google.js';
 import * as warehouse from './warehouse.js';
 import * as access from './access.js';
+import { withUserLock } from './lock.js';
 import { startSchedulers, runAllChecks } from './alerts.js';
 import {
   sendMessage,
@@ -159,6 +160,12 @@ async function handleMessage(message, areas) {
         return;
       }
 
+      if (state.awaiting === 'variantValue') {
+        await sendMessage(chatId, `שמעתי:\n<i>${transcript}</i>`);
+        await products.setVariantValue(chatId, userId, state.draftId, state.variantIndex ?? 0, transcript);
+        return;
+      }
+
       if (state.awaiting === 'imageFix') {
         await db.setState(userId, { ...state, awaiting: null });
         await products.generateImage(chatId, userId, state.draftId, state.imageKind, transcript);
@@ -200,10 +207,8 @@ async function handleMessage(message, areas) {
     'מוצר חדש': ['products', async () => {
       await db.clearState(userId);
 
-      const rows = [
-        [button('מוצר חדש', 'prod:new')],
-        [button('וריאציה למוצר קיים', 'prod:variation')],
-      ];
+      // שניים צרים למעלה, והרשימה ככפתור רחב מתחתיהם
+      const rows = [[button('מוצר חדש', 'prod:new'), button('וריאציה למוצר קיים', 'prod:variation')]];
 
       // האפשרות הזו מופיעה רק כשיש באמת מה לקחת מהרשימה
       try {
@@ -215,6 +220,12 @@ async function handleMessage(message, areas) {
         }
       } catch (error) {
         console.error('קריאת רשימת ההעלאה נכשלה:', error.message);
+      }
+
+      // טיוטה שננטשה באמצע מחכה להמשך
+      const open = await products.openDraftFor(userId);
+      if (open) {
+        rows.push([button(`המשך: ${open.name}`, `prod:resume:${open.id}`)]);
       }
 
       await sendMessage(chatId, 'מה נוסיף?', { reply_markup: inlineKeyboard(rows) });
@@ -287,6 +298,12 @@ async function handleTextInput(chatId, userId, text, areas = []) {
 
   if (state?.module === 'product' && state.awaiting === 'variantList') {
     await products.replaceVariantValues(chatId, userId, state.draftId, text);
+    return;
+  }
+
+  // תשובה על וריאציה בודדת שהבוט לא הצליח לקרוא
+  if (state?.module === 'product' && state.awaiting === 'variantValue') {
+    await products.setVariantValue(chatId, userId, state.draftId, state.variantIndex ?? 0, text);
     return;
   }
 
@@ -633,6 +650,56 @@ async function handleProductCallback(chatId, userId, action, rest) {
       await products.buildDraft(chatId, userId);
       break;
 
+    case 'resume': {
+      const draft = await products.getDraft(rest[0]);
+
+      if (!draft) {
+        await sendMessage(chatId, 'הטיוטה כבר לא קיימת.');
+        break;
+      }
+
+      await db.setState(userId, {
+        module: 'product',
+        mode: 'new',
+        draftId: rest[0],
+        photos: draft.images || [],
+        spoken: '',
+      });
+
+      await products.showSummary(chatId, rest[0]);
+      break;
+    }
+
+    // סגירת וריאציות שהבוט לא קרא בוודאות
+    case 'ask':
+      await products.askNextUncertain(chatId, userId, rest[0]);
+      break;
+
+    case 'drop1': {
+      const state = await db.getState(userId);
+      await products.dropVariantAt(chatId, userId, rest[0], state?.variantIndex ?? 0);
+      break;
+    }
+
+    // מלאי בוריאציות: prod:stk:each|split|none:DRAFT
+    case 'stk':
+      await products.applyVariantStock(chatId, userId, rest[1], rest[0]);
+      break;
+
+    // מעבר לעריכה: prod:go:new|keep:DRAFT
+    case 'go':
+      await products.goToEditor(chatId, userId, rest[1], rest[0]);
+      break;
+
+    case 'skipq': {
+      const draft = await products.getDraft(rest[0]);
+      if (draft) {
+        await products.saveDraft(rest[0], draft.user_id, { ...draft.content, questions: [] }, draft.images);
+      }
+      await products.showSummary(chatId, rest[0]);
+      break;
+    }
+
     case 'revise': {
       const state = await db.getState(userId);
       await db.setState(userId, { ...state, module: 'product', draftId: rest[0], awaiting: 'revise' });
@@ -756,7 +823,10 @@ app.post('/telegram/webhook', async (req, res) => {
       return;
     }
 
-    if (update.message) await handleMessage(update.message, areas);
+    // הודעות של אותו משתמש נכנסות לתור אחד. צרור תמונות מגיע
+    // כהודעות נפרדות באותו רגע, ובלי זה הן דורסות זו את זו.
+    // כפתורים לא ננעלים, כדי שפעולה ארוכה לא תתקע הודעה חדשה.
+    if (update.message) await withUserLock(from.id, () => handleMessage(update.message, areas));
     else if (update.callback_query) await handleCallback(update.callback_query, areas);
   } catch (error) {
     console.error('שגיאה בטיפול בעדכון:', error);

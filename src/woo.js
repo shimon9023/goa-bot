@@ -186,6 +186,41 @@ export function getTags() {
   return request('/products/tags', { query: { per_page: 100 } });
 }
 
+// --- תכונות גלובליות ---
+// באתר כבר קיימות תכונות כמו "בחר טעם" ו"בחר צבע" עם הערכים שלהן.
+// מוצר עם וריאציות חייב להשתמש בהן, אחרת הערכים לא מתחברים
+// לשום דבר קיים ואי אפשר לסנן לפיהם.
+
+// מוצרים של קטגוריה מסוימת, לפי מזהה. משמש ללימוד סגנון הכתיבה.
+export function getProductsInCategory(categoryId, limit = 6) {
+  return request('/products', {
+    query: {
+      category: String(categoryId),
+      per_page: limit,
+      status: 'publish',
+      orderby: 'date',
+      order: 'desc',
+    },
+  });
+}
+
+export function getAttributes() {
+  return request('/products/attributes', { query: { per_page: 100 } });
+}
+
+export function getAttributeTerms(attributeId) {
+  return request(`/products/attributes/${attributeId}/terms`, {
+    query: { per_page: 100, orderby: 'name' },
+  });
+}
+
+export function createAttributeTerm(attributeId, { name, slug }) {
+  return request(`/products/attributes/${attributeId}/terms`, {
+    method: 'POST',
+    body: slug ? { name, slug } : { name },
+  });
+}
+
 // --- מדיה ומטא, דרך ה-API של וורדפרס ---
 // הנתיב אחר מזה של ווקומרס, אבל אותם מפתחות עובדים.
 

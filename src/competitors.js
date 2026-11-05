@@ -3,15 +3,76 @@
 // הבוט אף פעם לא קובע מחיר, רק מראה מה יש בשוק.
 
 import { supabase } from './db.js';
+import * as woo from './woo.js';
+
+// --- היררכיית קטגוריות ---
+// המתחרים מוגדרים לפי קטגוריה ראשית, אבל מוצר מסווג לתת-קטגוריה.
+// בלי זה מוצר ב"מצתים" לא מוצא את המתחרים של "מוצרים לעישון".
+
+let treeCache = { at: 0, byName: new Map(), byId: new Map() };
+
+async function categoryTree() {
+  // הקטגוריות כמעט לא משתנות, אז שעה של מטמון חוסכת פניות מיותרות
+  if (treeCache.byId.size && Date.now() - treeCache.at < 60 * 60 * 1000) return treeCache;
+
+  const categories = await woo.getCategories();
+
+  const byId = new Map();
+  const byName = new Map();
+
+  for (const category of categories) {
+    byId.set(category.id, category);
+    byName.set(String(category.name).trim(), category);
+  }
+
+  treeCache = { at: Date.now(), byId, byName };
+  return treeCache;
+}
+
+// מחזיר את הקטגוריה וכל ההורים שלה, מהספציפי לכללי
+export async function categoryChain(name) {
+  if (!name) return [];
+
+  try {
+    const { byId, byName } = await categoryTree();
+    const start = byName.get(String(name).trim());
+
+    if (!start) return [String(name).trim()];
+
+    const chain = [];
+    let current = start;
+    const seen = new Set();
+
+    while (current && !seen.has(current.id)) {
+      seen.add(current.id);
+      chain.push(String(current.name).trim());
+      current = current.parent ? byId.get(current.parent) : null;
+    }
+
+    return chain;
+  } catch (error) {
+    console.error('קריאת היררכיית הקטגוריות נכשלה:', error.message);
+    return [String(name).trim()];
+  }
+}
 
 // --- ניהול רשימת המתחרים ---
 
 export async function listCompetitors(category = null) {
-  let query = supabase.from('bot_competitors').select('*').order('name');
+  if (!category) {
+    const { data } = await supabase.from('bot_competitors').select('*').order('name');
+    return data || [];
+  }
 
-  if (category) query = query.contains('categories', [category]);
+  // מחפשים מתחרים של הקטגוריה עצמה ושל כל ההורים שלה
+  const chain = await categoryChain(category);
 
-  const { data } = await query;
+  const { data } = await supabase
+    .from('bot_competitors')
+    .select('*')
+    .overlaps('categories', chain)
+    .order('name');
+
   return data || [];
 }
 
@@ -89,10 +150,12 @@ export async function researchPrice(productName, category = null) {
   const competitors = await listCompetitors(category);
 
   if (!competitors.length) {
+    const chain = category ? await categoryChain(category) : [];
+
     return {
       found: false,
       message: category
-        ? `אין מתחרים מוגדרים לקטגוריה "${category}". אפשר להוסיף בהגדרות.`
+        ? `אין מתחרים מוגדרים ל"${chain.join('" או "')}". אפשר להוסיף בהגדרות.`
         : 'אין מתחרים מוגדרים. אפשר להוסיף בהגדרות.',
       results: [],
     };
