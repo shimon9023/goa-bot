@@ -36,7 +36,8 @@ export function remove(id) {
 }
 
 export function publicUrl(baseUrl, id, mimeType) {
-  const extension = String(mimeType).includes('png') ? 'png' : 'jpg';
+  const type = String(mimeType);
+  const extension = type.includes('webp') ? 'webp' : type.includes('png') ? 'png' : 'jpg';
   return `${baseUrl}/img/${id}.${extension}`;
 }
 

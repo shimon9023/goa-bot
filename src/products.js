@@ -9,6 +9,7 @@ import { supabase } from './db.js';
 import * as ai from './ai.js';
 import * as competitors from './competitors.js';
 import * as imagestore from './imagestore.js';
+import * as cutout from './cutout.js';
 import * as google from './google.js';
 import * as warehouse from './warehouse.js';
 import * as attributes from './attributes.js';
@@ -839,10 +840,14 @@ export async function generateImage(chatId, userId, draftId, kind, correctionHin
 
       const result = await ai.generateProductImage(sourceUrl, { correctionHint });
 
+      // הרקע הלבן נחתך, המוצר ממלא את הפריים, והקובץ נשמר כ-WebP.
+      // אם משהו שם נכשל, מקבלים בחזרה את התמונה המקורית.
+      const ready = await cutout.process(result.buffer, result.mimeType);
+
       // מגישים את התמונה מהשרת שלנו, וווקומרס ימשוך אותה.
       // העלאה ישירה לספריית המדיה חסומה למפתחות ווקומרס.
-      const id = imagestore.put(result.buffer, result.mimeType);
-      const url = imagestore.publicUrl(config.publicBaseUrl, id, result.mimeType);
+      const id = imagestore.put(ready.buffer, ready.mimeType);
+      const url = imagestore.publicUrl(config.publicBaseUrl, id, ready.mimeType);
 
       produced.push({ url, label: variants[index]?.value || null });
     } catch (error) {

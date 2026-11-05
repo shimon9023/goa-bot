@@ -1130,7 +1130,7 @@ app.post('/cron/run-checks', async (req, res) => {
 // ווקומרס מוריד מכאן את התמונה ומכניס אותה לספריית המדיה.
 
 app.get('/img/:file', (req, res) => {
-  const id = String(req.params.file).replace(/\.(png|jpg|jpeg)$/i, '');
+  const id = String(req.params.file).replace(/\.(png|jpg|jpeg|webp)$/i, '');
   const item = imagestore.get(id);
 
   if (!item) return res.sendStatus(404);
