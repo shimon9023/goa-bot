@@ -4,6 +4,8 @@
 
 import { supabase } from './db.js';
 import * as woo from './woo.js';
+import * as ai from './ai.js';
+import { stripHtml } from './html.js';
 
 // --- היררכיית קטגוריות ---
 // המתחרים מוגדרים לפי קטגוריה ראשית, אבל מוצר מסווג לתת-קטגוריה.
@@ -108,31 +110,14 @@ async function searchOnSite(siteUrl, term) {
   return { html: await response.text(), searchUrl: url };
 }
 
-// מוציא מחירים מתוך HTML של עמוד תוצאות
-function extractPrices(html) {
-  const prices = [];
+// מצמצם את ה-HTML לאזור התוצאות, כדי שקלוד לא יקרא תפריטים וכותרות תחתונות
+function resultsSection(html) {
+  const text = String(html);
 
-  // מחירים בתוך תגיות המחיר הסטנדרטיות של ווקומרס
-  const matches = html.matchAll(
-    /<span class="woocommerce-Price-amount[^"]*"[^>]*>.*?([\d,]+(?:\.\d{2})?)/gis
-  );
+  const start = text.search(/<(ul|div)[^>]*class="[^"]*products[^"]*"/i);
+  if (start === -1) return text;
 
-  for (const match of matches) {
-    const value = Number(match[1].replace(/,/g, ''));
-    if (value > 0 && value < 100000) prices.push(value);
-  }
-
-  // אם לא נמצא כלום, ניסיון רחב יותר על סימן השקל
-  if (!prices.length) {
-    const fallback = html.matchAll(/₪\s*([\d,]+(?:\.\d{2})?)|([\d,]+(?:\.\d{2})?)\s*₪/g);
-    for (const match of fallback) {
-      const raw = match[1] || match[2];
-      const value = Number(raw.replace(/,/g, ''));
-      if (value > 0 && value < 100000) prices.push(value);
-    }
-  }
-
-  return prices;
+  return text.slice(start, start + 60000);
 }
 
 // מוציא את הקישור הראשון לעמוד מוצר
@@ -165,24 +150,34 @@ export async function researchPrice(productName, category = null) {
     competitors.map(async (competitor) => {
       try {
         const { html, searchUrl } = await searchOnSite(competitor.site_url, productName);
-        const prices = extractPrices(html);
         const productUrl = extractFirstProductUrl(html, competitor.site_url);
+        const pageText = stripHtml(resultsSection(html));
 
-        if (!prices.length) {
+        // עמוד ריק באמת, אין טעם לשרוף קריאה לקלוד
+        if (pageText.length < 30) {
+          return { name: competitor.name, status: 'not_found', url: searchUrl };
+        }
+
+        const read = await ai.readCompetitorPage({
+          productName,
+          competitor: competitor.name,
+          pageText,
+        });
+
+        if (!read.found || read.price === null) {
           return {
             name: competitor.name,
             status: 'not_found',
             url: productUrl || searchUrl,
+            reason: read.reason,
           };
         }
-
-        const unique = [...new Set(prices)].sort((a, b) => a - b);
 
         return {
           name: competitor.name,
           status: 'ok',
-          min: unique[0],
-          max: unique[unique.length - 1],
+          price: read.price,
+          matchedName: read.matchedName,
           url: productUrl || searchUrl,
         };
       } catch (error) {
@@ -205,12 +200,9 @@ export function formatResearch(research) {
 
   for (const result of research.results) {
     if (result.status === 'ok') {
-      const range = result.min === result.max
-        ? `${result.min} ₪`
-        : `${result.min}-${result.max} ₪`;
-      lines.push(`<a href="${result.url}">${result.name}</a>: ${range}`);
+      lines.push(`<a href="${result.url}">${result.name}</a>: ${result.price} ₪`);
     } else if (result.status === 'not_found') {
-      lines.push(`${result.name}: לא נמצא`);
+      lines.push(`${result.name}: אין לו את המוצר`);
     } else {
       lines.push(`${result.name}: לא הצלחתי לבדוק`);
     }

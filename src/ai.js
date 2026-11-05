@@ -626,30 +626,22 @@ export async function transcribe(audioUrl) {
 // שני מסלולי פרומפטים. שמעון משפר אותם ומחליף כאן.
 export const IMAGE_PROMPTS = {
   product: `צלם מחדש את המוצר הזה כתמונת מוצר לחנות מקוונת.
-רקע נקי ואחיד, תאורה רכה ואחידה, בלי צללים חדים.
-המוצר במרכז, חד לגמרי, בפרופורציות אמיתיות.
-אל תשנה את המוצר עצמו, את הצבע שלו ואת הטקסט שעליו.`,
 
-  clothing: {
-    shirt: `צלם מחדש את הפריט הזה כתמונת מוצר.
-הצג אותו פרוס ישר מלמעלה, בלי קמטים, על רקע נקי ואחיד.
-שמור על הצבע המדויק ועל ההדפס כפי שהם.`,
+המוצר ממלא כמעט את כל הפריים. השאר שוליים מינימליים בלבד,
+לא יותר מכמה אחוזים מכל צד. אל תשאיר שטח ריק מיותר סביבו.
+קרב את המסגרת עד שהמוצר נוגע כמעט בקצוות.
 
-    pants: `צלם מחדש את הפריט הזה כתמונת מוצר.
-הצג אותו מקופל בצורה מסודרת על רקע נקי ואחיד.
-שמור על הצבע המדויק ועל הפרטים כפי שהם.`,
+רקע לבן אחיד לגמרי, בלי מרקם, בלי הדרגתיות ובלי צללים על הרקע.
+תאורה רכה ואחידה.
 
-    pajama: `צלם מחדש את הפריט הזה כתמונת מוצר.
-הצג את הסט פרוס בצורה מסודרת על רקע נקי ואחיד, כך שרואים את שני החלקים.
-שמור על הצבע המדויק ועל ההדפס כפי שהם.`,
-  },
+אל תשנה את המוצר עצמו: לא את הצורה, לא את הצבע,
+ולא את הטקסט או הלוגו שעליו. שמור על פרופורציות אמיתיות.
+בלי להוסיף אביזרים, משטחים או רקעים דקורטיביים.`,
 };
 
-export async function generateProductImage(imageUrl, { kind = 'product', clothingType = 'shirt', correctionHint = '' } = {}) {
-  const basePrompt =
-    kind === 'clothing'
-      ? IMAGE_PROMPTS.clothing[clothingType] || IMAGE_PROMPTS.clothing.shirt
-      : IMAGE_PROMPTS.product;
+export async function generateProductImage(imageUrl, { correctionHint = '' } = {}) {
+  // הכל מוצרי עישון. אין יותר הפרדה בין סוגי מוצר.
+  const basePrompt = IMAGE_PROMPTS.product;
 
   // ההערה של שמעון נדבקת בסוף, כמו correctionHint ב-AI Studio
   const prompt = correctionHint ? `${basePrompt}\n\n${correctionHint}` : basePrompt;
@@ -736,6 +728,87 @@ minPrice: המחיר בשקלים שמופיע על המדבקה של המוצר
     description: String(result.description || '').trim(),
     quantity: String(result.quantity ?? '').trim(),
     minPrice: String(result.minPrice ?? '').trim(),
+  };
+}
+
+// --- קריאת תוצאות חיפוש אצל מתחרה ---
+// חיטוט במספרים מתוך העמוד החזיר מחירים של מוצרים אחרים ושל באנרים,
+// ודיווח על מחיר גם כשלמתחרה לא היה המוצר בכלל.
+// כאן קלוד קורא את העמוד ומחליט אם המוצר באמת שם.
+
+export async function readCompetitorPage({ productName, competitor, pageText }) {
+  const result = await callClaudeJson({
+    label: 'עמוד מתחרה',
+    maxTokens: 500,
+    system: `אתה קורא עמוד תוצאות חיפוש של חנות מוצרי עישון ישראלית
+ובודק אם מוצר מסוים נמכר שם, ובאיזה מחיר.
+
+היה קפדן. "נמצא" הוא רק כשזה באמת אותו מוצר: אותו מותג ואותו דגם.
+מוצר דומה מאותה קטגוריה הוא לא התאמה.
+אם העמוד ריק, אומר שאין תוצאות, או מציג מוצרים אחרים — found הוא false.
+
+המחיר הוא המחיר של המוצר שזוהה בלבד.
+אל תיקח מחיר מבאנר, ממוצר מומלץ בצד או מרשימת מוצרים אחרים.
+אם אתה לא בטוח איזה מחיר שייך למוצר, החזר null.`,
+    messages: [
+      {
+        role: 'user',
+        content: `המוצר שאנחנו מחפשים: ${productName}
+החנות: ${competitor}
+
+תוכן עמוד התוצאות:
+${String(pageText).slice(0, 6000)}
+
+החזר JSON:
+{ "found": false, "matchedName": null, "price": null, "reason": "משפט קצר" }`,
+      },
+    ],
+  });
+
+  return {
+    found: Boolean(result?.found),
+    matchedName: result?.matchedName || null,
+    price: Number.isFinite(Number(result?.price)) ? Number(result.price) : null,
+    reason: result?.reason || '',
+  };
+}
+
+// --- כתיבה מחדש בסגנון המוצרים הקיימים ---
+// מעבר שני, אחרי שהקטגוריה כבר נבחרה. בלעדיו הסגנון לא באמת חל,
+// כי בשלב הראשון עוד לא יודעים לאיזו קטגוריה המוצר שייך.
+
+export async function restyleProductContent(content, styleExamples) {
+  const result = await callClaudeJson({
+    label: 'סגנון',
+    maxTokens: 2500,
+    system: `אתה מתאים טקסטים של מוצר לסגנון הכתיבה של החנות.
+
+${styleExamples}
+
+אל תשנה עובדות, מידות, כמויות או שמות. רק את אופן הכתיבה:
+האורך, המקצב, מבנה המשפטים ואופי הניסוח.
+אל תוסיף מידע שלא קיים בטקסט המקורי.`,
+    messages: [
+      {
+        role: 'user',
+        content: `הטקסטים הנוכחיים:
+
+שם: ${content.name || ''}
+תיאור קצר: ${content.shortDescription || ''}
+תיאור: ${content.description || ''}
+
+החזר JSON:
+{ "name": "", "shortDescription": "", "description": "" }
+
+התיאור הקצר הוא כותרת של שלוש עד שש מילים, בלי נקודה בסוף.`,
+      },
+    ],
+  });
+
+  return {
+    name: result?.name || content.name,
+    shortDescription: result?.shortDescription || content.shortDescription,
+    description: result?.description || content.description,
   };
 }
 

@@ -68,6 +68,17 @@ export function sendPhoto(chatId, photoUrl, caption = '', extra = {}) {
   });
 }
 
+// גלריית תמונות בהודעה אחת, במקום הודעה לכל תמונה
+export function sendMediaGroup(chatId, photoUrls, caption = '') {
+  const media = photoUrls.slice(0, 10).map((url, index) => ({
+    type: 'photo',
+    media: url,
+    ...(index === 0 && caption ? { caption, parse_mode: 'HTML' } : {}),
+  }));
+
+  return call('sendMediaGroup', { chat_id: chatId, media });
+}
+
 export function getFile(fileId) {
   return call('getFile', { file_id: fileId });
 }

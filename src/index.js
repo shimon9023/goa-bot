@@ -21,6 +21,7 @@ import * as google from './google.js';
 import * as warehouse from './warehouse.js';
 import * as access from './access.js';
 import { withUserLock } from './lock.js';
+import * as card from './card.js';
 import { startSchedulers, runAllChecks } from './alerts.js';
 import {
   sendMessage,
@@ -93,6 +94,10 @@ async function handleMessage(message, areas) {
   const userId = message.from.id;
   const text = (message.text || '').trim();
 
+  // זוכרים מתי שמעון דיבר אחרון, כדי לדעת אם מותר לערוך כרטיס קיים
+  // או שצריך לשלוח חדש כי הכרטיס כבר לא למטה
+  await card.noteUserMessage(userId, message.message_id);
+
   // כפתור בתפריט תמיד מנצח, גם באמצע איסוף מוצר לרשימה
   const isMenuPress = access.AREAS.some((area) => area.button === text)
     || text === 'הגדרות' || text === 'התחל מההתחלה' || text === '/start';
@@ -106,13 +111,22 @@ async function handleMessage(message, areas) {
     }
   }
 
-  // תמונה שנשלחה בזמן בניית מוצר
+  // תמונה שנשלחה בזמן בניית מוצר.
+  // צרור תמונות מגיע כהודעות נפרדות, ולכן מעדכנים כרטיס אחד
+  // במקום לענות "קיבלתי את התמונה" על כל אחת בנפרד.
   if (message.photo?.length) {
     const collected = await products.collectPhoto(userId, message.photo);
+
     if (collected) {
-      await sendMessage(chatId, 'קיבלתי את התמונה. עוד משהו, או "מוכן"?', {
-        reply_markup: inlineKeyboard([[button('מוכן', 'prod:ready')]]),
-      });
+      const state = await db.getState(userId);
+      const count = state?.photos?.length || 1;
+
+      await card.show(
+        chatId,
+        userId,
+        `קיבלתי ${count === 1 ? 'תמונה אחת' : `${count} תמונות`}.\nעוד משהו, או "מוכן"?`,
+        { reply_markup: inlineKeyboard([[button('מוכן', 'prod:ready')]]) }
+      );
       return;
     }
   }
@@ -142,7 +156,7 @@ async function handleMessage(message, areas) {
     const state = await db.getState(userId);
 
     if (state?.module === 'product') {
-      await sendMessage(chatId, 'מתמלל.');
+      await card.show(chatId, userId, 'מתמלל.');
 
       const file = await getFile((message.voice || message.audio).file_id);
       const transcript = await ai.transcribe(fileUrl(file.file_path));
@@ -173,7 +187,8 @@ async function handleMessage(message, areas) {
       }
 
       await products.collectText(userId, transcript);
-      await sendMessage(chatId, `שמעתי:\n<i>${transcript}</i>\n\nעוד משהו, או "מוכן"?`, {
+
+      await card.show(chatId, userId, `שמעתי:\n<i>${transcript}</i>\n\nעוד משהו, או "מוכן"?`, {
         reply_markup: inlineKeyboard([[button('מוכן', 'prod:ready')]]),
       });
       return;

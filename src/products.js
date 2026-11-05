@@ -13,10 +13,12 @@ import * as google from './google.js';
 import * as warehouse from './warehouse.js';
 import * as attributes from './attributes.js';
 import * as style from './style.js';
+import * as card from './card.js';
 import { config } from './config.js';
 import {
   sendMessage,
   sendPhoto,
+  sendMediaGroup,
   inlineKeyboard,
   button,
   webAppButton,
@@ -174,7 +176,7 @@ export async function buildDraft(chatId, userId) {
   const settings = await db.getSettings();
   await ai.assertWithinBudget(settings);
 
-  await sendMessage(chatId, 'עובד על זה, זה לוקח כמה שניות.');
+  await card.show(chatId, userId, 'עובד על זה, זה לוקח כמה שניות.');
 
   // קוראים את כל התמונות יחד, כדי לזהות גם וריאציות.
   // נותנים לקלוד את התכונות שכבר קיימות באתר, כדי שיבחר מתוכן.
@@ -215,16 +217,17 @@ export async function buildDraft(chatId, userId) {
 
   // דוגמאות כתיבה מהמוצרים הקיימים. קודם מנחשים קטגוריה גסה
   // מתוך מה שנאמר ומה שנראה, רק כדי למשוך דוגמאות רלוונטיות.
+  let guessed = null;
   let styleExamples = '';
+
   try {
-    const guess = guessCategory(categories, `${state.spoken || ''} ${imageDescription}`);
-    const examples = await style.examplesFor(guess, 4);
-    styleExamples = style.asPromptBlock(examples);
+    guessed = guessCategory(categories, `${state.spoken || ''} ${imageDescription}`);
+    styleExamples = style.asPromptBlock(await style.examplesFor(guessed, 4));
   } catch (error) {
     console.error('לימוד הסגנון נכשל:', error.message);
   }
 
-  const content = await ai.writeProductContent({
+  let content = await ai.writeProductContent({
     spokenText: state.spoken,
     imageDescription,
     categories,
@@ -232,6 +235,23 @@ export async function buildDraft(chatId, userId) {
     webContext,
     styleExamples,
   });
+
+  // מעבר שני: עכשיו הקטגוריה האמיתית ידועה. אם היא שונה ממה שניחשנו,
+  // או שלא היו לנו דוגמאות בכלל, כותבים מחדש בסגנון הנכון.
+  const chosen = content.categories?.[0] || null;
+
+  if (chosen && (!styleExamples || chosen !== guessed)) {
+    try {
+      const examples = await style.examplesFor(chosen, 4);
+
+      if (examples.length) {
+        const restyled = await ai.restyleProductContent(content, style.asPromptBlock(examples));
+        content = { ...content, ...restyled };
+      }
+    } catch (error) {
+      console.error('התאמת הסגנון נכשלה:', error.message);
+    }
+  }
 
   // המטא לא נכתב כאן. הוא נכתב אחרי שהמחיר נקבע.
   const meta = {};
@@ -349,6 +369,9 @@ export async function showSummary(chatId, draftId) {
     lines.push('תענה בכתיבה או בהקלטה, או דלג.');
   }
 
+  lines.push('');
+  lines.push('<i>להוספה או לתיקון, פשוט תכתוב או תקליט.</i>');
+
   const rows = [];
 
   // וריאציה שלא קראתי בוודאות חוסמת. חייבים לסגור אותה קודם.
@@ -356,16 +379,16 @@ export async function showSummary(chatId, draftId) {
     rows.push([button(`${uncertain.length} וריאציות לא ברורות, בוא נסגור`, `prod:ask:${draftId}`)]);
   }
 
-  rows.push([button('להוסיף או לתקן פרטים', `prod:revise:${draftId}`)]);
+  rows.push([button('ייצר תמונות ופתח מוצר', `prod:go:new:${draftId}`)]);
+  rows.push([button('פתח מוצר', `prod:go:keep:${draftId}`)]);
 
-  if (questions.length) rows.push([button('אין לי מה להוסיף', `prod:skipq:${draftId}`)]);
-
-  rows.push([button('ייצר תמונות ופתח לעריכה', `prod:go:new:${draftId}`)]);
-  rows.push([button('השתמש בתמונות הקיימות ופתח לעריכה', `prod:go:keep:${draftId}`)]);
-
-  await sendMessage(chatId, lines.filter((line) => line !== null).join('\n'), {
+  await card.show(chatId, draft.user_id, lines.filter((line) => line !== null).join('\n'), {
     reply_markup: inlineKeyboard(rows),
   });
+
+  // כל טקסט או הקלטה מכאן ואילך הם תיקון, בלי צורך בכפתור
+  const state = (await db.getState(draft.user_id)) || {};
+  await db.setState(draft.user_id, { ...state, module: 'product', draftId, awaiting: 'revise' });
 }
 
 // --- תכנון וריאציות ---
@@ -388,16 +411,41 @@ function buildVariantPlan(vision, photos) {
 
 // ניחוש גס של הקטגוריה, רק כדי למשוך דוגמאות כתיבה מהאזור הנכון.
 // הקטגוריה האמיתית נבחרת על ידי קלוד בהמשך.
+//
+// התאמה מילה במילה לא עובדת בעברית: "מאפרת קריסטל" לא מכיל
+// את המילה "מאפרות". לכן משווים לפי תחילת המילה.
+function stem(word) {
+  return String(word)
+    .replace(/[^֐-׿a-zA-Z0-9]/g, '')
+    .slice(0, 4)
+    .toLowerCase();
+}
+
 function guessCategory(categories, text) {
-  const haystack = String(text || '');
-  if (!haystack.trim()) return null;
+  const words = String(text || '')
+    .split(/\s+/)
+    .map(stem)
+    .filter((word) => word.length >= 3);
 
-  // הספציפי מנצח: מעדיפים את השם הארוך ביותר שמופיע בטקסט
-  const hits = categories
-    .filter((category) => category.name && haystack.includes(category.name))
-    .sort((a, b) => b.name.length - a.name.length);
+  if (!words.length) return null;
 
-  return hits[0]?.name || null;
+  const scored = categories
+    .map((category) => {
+      const parts = String(category.name || '').split(/\s+/).map(stem).filter((p) => p.length >= 3);
+      if (!parts.length) return null;
+
+      // "מצת" מול "מצתים": אחד תחילית של השני
+      const hits = parts.filter((part) =>
+        words.some((word) => word.startsWith(part) || part.startsWith(word))
+      ).length;
+
+      return hits ? { name: category.name, hits, parts: parts.length } : null;
+    })
+    .filter(Boolean)
+    // כמה מילים התאימו קודם, ואז הקטגוריה הספציפית יותר
+    .sort((a, b) => b.hits - a.hits || b.parts - a.parts);
+
+  return scored[0]?.name || null;
 }
 
 // --- סגירת וריאציות שלא נקראו בוודאות ---
@@ -595,7 +643,7 @@ export async function reviseDraft(chatId, userId, draftId, instruction) {
     return;
   }
 
-  await sendMessage(chatId, 'מתקן.');
+  await card.show(chatId, userId, 'מתקן.');
 
   const revised = await ai.reviseProductContent(draft.content, instruction);
 
@@ -679,7 +727,6 @@ export async function generateImage(chatId, userId, draftId, kind, correctionHin
       : 'מייצר תמונה.'
   );
 
-  const isClothing = kind !== 'product';
   const sources = total > 1 ? variants.map((v) => v.photo) : [draft.images[0]];
 
   const produced = [];
@@ -689,11 +736,7 @@ export async function generateImage(chatId, userId, draftId, kind, correctionHin
     try {
       const sourceUrl = await resolvePhotoUrl(source);
 
-      const result = await ai.generateProductImage(sourceUrl, {
-        kind: isClothing ? 'clothing' : 'product',
-        clothingType: kind,
-        correctionHint,
-      });
+      const result = await ai.generateProductImage(sourceUrl, { correctionHint });
 
       // מגישים את התמונה מהשרת שלנו, וווקומרס ימשוך אותה.
       // העלאה ישירה לספריית המדיה חסומה למפתחות ווקומרס.
@@ -740,9 +783,28 @@ export async function generateImage(chatId, userId, draftId, kind, correctionHin
   }
 
   const caption = [
-    produced.length > 1 ? `${produced.length} תמונות מוכנות. זו הראשונה.` : 'איך זה נראה?',
+    produced.length > 1 ? `${produced.length} תמונות מוכנות.` : 'איך זה נראה?',
     failed.length ? `נכשלו: ${failed.join(', ')}` : '',
   ].filter(Boolean).join('\n');
+
+  // כמה תמונות נשלחות כגלריה אחת, לא הודעה לכל אחת
+  if (produced.length > 1) {
+    try {
+      await sendMediaGroup(chatId, produced.map((item) => item.url), caption);
+    } catch (error) {
+      console.error('שליחת הגלריה נכשלה, שולח אחת:', error.message);
+      await sendPhoto(chatId, produced[0].url, caption);
+    }
+
+    await sendMessage(chatId, 'מה עכשיו?', {
+      reply_markup: inlineKeyboard([
+        [button('אהבתי', `prod:imgok:${draftId}`)],
+        [button('ייצר שוב', `prod:regen:${kind}:${draftId}`)],
+        [button('תקן לפי הערה', `prod:imgfix:${kind}:${draftId}`)],
+      ]),
+    });
+    return;
+  }
 
   await sendPhoto(chatId, produced[0].url, caption, {
     reply_markup: inlineKeyboard([
