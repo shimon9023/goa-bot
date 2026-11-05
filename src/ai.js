@@ -293,7 +293,7 @@ notes: לכל היותר שלוש הערות, כל אחת משפט קצר.
 
 // --- מטא SEO, בקריאה נפרדת עם הכללים שלו ---
 
-export async function writeMeta({ name, description, price, productKind, isBulk }) {
+export async function writeMeta({ name, description, price, productKind, isBulk, problems = [] }) {
   const priceNote = price
     ? `מחיר המוצר: ${price} ₪`
     : 'אין מחיר. כתוב את הכותרת בלי מחיר, וציין בהערות שחסר מחיר.';
@@ -322,7 +322,8 @@ ${description}
   "angle": "משפט אחד, למה זה ינצח את המתחרים"
 }
 
-titleLength ו-descriptionLength הם ספירת התווים בפועל. ודא שהם בטווח לפני שאתה מחזיר.`,
+titleLength ו-descriptionLength הם ספירת התווים בפועל. ודא שהם בטווח לפני שאתה מחזיר.
+${problems.length ? `\nהניסיון הקודם נפסל. תקן בדיוק את אלה:\n${problems.map((p) => `- ${p}`).join('\n')}` : ''}`,
       },
     ],
   });

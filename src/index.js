@@ -895,11 +895,41 @@ app.get('/api/product/:draftId', async (req, res) => {
 
     res.json({
       content: draft.content,
-      categories: categories.map((c) => ({ id: c.id, name: c.name })),
+      // ההורה נשלח כדי שהרשימה תוצג מדורגת לפי ההיררכיה
+      categories: categories.map((c) => ({ id: c.id, name: c.name, parent: c.parent || 0 })),
       tags: tags.map((t) => ({ id: t.id, name: t.name })),
     });
   } catch (error) {
     console.error('טעינת טיוטה נכשלה:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// שמירת המחיר והשדות. מכאן נכתב המטא, ורק אז אפשר לפרסם.
+app.post('/api/product/:draftId/price', async (req, res) => {
+  try {
+    const draftId = req.params.draftId;
+    const existing = await products.getDraft(draftId);
+
+    if (!existing) return res.status(404).json({ error: 'הטיוטה לא נמצאה' });
+
+    await products.saveDraft(
+      draftId,
+      existing.user_id,
+      { ...existing.content, ...(req.body.content || {}) },
+      existing.images
+    );
+
+    const result = await products.buildMeta(draftId);
+
+    res.json({
+      ok: true,
+      metaTitle: result?.meta?.metaTitle || '',
+      metaDescription: result?.meta?.metaDescription || '',
+      problems: result?.verdict?.problems || [],
+    });
+  } catch (error) {
+    console.error('שמירת המחיר נכשלה:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
@@ -920,12 +950,12 @@ app.post('/api/product/:draftId', async (req, res) => {
       existing.images
     );
 
-    await products.publish(existing.user_id, existing.user_id, draftId, status);
-
     res.json({ ok: true });
+
+    await products.publish(existing.user_id, existing.user_id, draftId, status);
   } catch (error) {
     console.error('שמירת מוצר נכשלה:', error.message);
-    res.status(500).json({ error: error.message });
+    if (!res.headersSent) res.status(500).json({ error: error.message });
   }
 });
 

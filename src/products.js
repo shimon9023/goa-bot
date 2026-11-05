@@ -14,6 +14,7 @@ import * as warehouse from './warehouse.js';
 import * as attributes from './attributes.js';
 import * as style from './style.js';
 import * as card from './card.js';
+import * as metaCheck from './meta-check.js';
 import { config } from './config.js';
 import {
   sendMessage,
@@ -569,8 +570,82 @@ export async function applyVariantStock(chatId, userId, draftId, mode) {
   await showSummary(chatId, draftId);
 }
 
+// --- מטא, אחרי שהמחיר נקבע ---
+// נכתב עם כללי הסקיל, ואז נבדק בקוד. מה שלא עובר חוזר לתיקון פעם אחת.
+
+export async function buildMeta(draftId) {
+  const draft = await getDraft(draftId);
+  if (!draft) return null;
+
+  const content = draft.content;
+  const price = content.priceFromUser;
+
+  let meta = await ai.writeMeta({
+    name: content.name,
+    description: content.description,
+    price,
+    productKind: content.productKind,
+    isBulk: content.isBulk,
+  });
+
+  let verdict = metaCheck.check({
+    title: meta.metaTitle,
+    description: meta.metaDescription,
+    h1: content.name,
+    price,
+    isBulk: content.isBulk,
+  });
+
+  if (!verdict.ok) {
+    console.error('המטא לא עבר בדיקה, מתקן:', verdict.problems.join(' | '));
+
+    try {
+      meta = await ai.writeMeta({
+        name: content.name,
+        description: content.description,
+        price,
+        productKind: content.productKind,
+        isBulk: content.isBulk,
+        problems: verdict.problems,
+      });
+
+      verdict = metaCheck.check({
+        title: meta.metaTitle,
+        description: meta.metaDescription,
+        h1: content.name,
+        price,
+        isBulk: content.isBulk,
+      });
+    } catch (error) {
+      console.error('תיקון המטא נכשל:', error.message);
+    }
+  }
+
+  const updated = {
+    ...content,
+    metaTitle: meta.metaTitle || '',
+    metaDescription: meta.metaDescription || '',
+    metaProblems: verdict.ok ? [] : verdict.problems,
+  };
+
+  await saveDraft(draftId, draft.user_id, updated, draft.images);
+
+  return { meta, verdict };
+}
+
 // --- המעבר לעריכה ---
 // התמונות נוצרות ברקע בזמן שהוא עורך, כדי לא לבזבז את זמנו.
+
+// שורת הכפתורים של המיני אפ. כשיש כבר מטא, נוסף כפתור שפותח
+// ישר את מסך הצפייה, כדי לא לעבור שוב דרך העריכה.
+function editorRow(draftId, content, label = 'פתח לעריכה') {
+  const base = `${config.publicBaseUrl}/product/${draftId}`;
+  const row = [webAppButton(label, base)];
+
+  if (content?.metaTitle) row.push(webAppButton('צפייה', `${base}?view=preview`));
+
+  return row;
+}
 
 export async function goToEditor(chatId, userId, draftId, mode) {
   const draft = await getDraft(draftId);
@@ -579,7 +654,6 @@ export async function goToEditor(chatId, userId, draftId, mode) {
   // מלאי בוריאציות נסגר לפני שממשיכים
   if (await askVariantStock(chatId, userId, draftId)) return;
 
-  const editorUrl = `${config.publicBaseUrl}/product/${draftId}`;
 
   if (mode === 'new') {
     await sendMessage(
@@ -588,7 +662,7 @@ export async function goToEditor(chatId, userId, draftId, mode) {
         'מתחיל לייצר את התמונות ברקע.',
         'אפשר להיכנס לעריכה עכשיו, והן יחכו לך בסוף.',
       ].join('\n'),
-      { reply_markup: inlineKeyboard([[webAppButton('פתח לעריכה', editorUrl)]]) }
+      { reply_markup: inlineKeyboard([editorRow(draftId, draft.content)]) }
     );
 
     // בכוונה בלי await: העריכה לא מחכה לתמונות
@@ -603,7 +677,7 @@ export async function goToEditor(chatId, userId, draftId, mode) {
   await useOriginalImages(draftId);
 
   await sendMessage(chatId, 'משתמש בתמונות כמו שהן.', {
-    reply_markup: inlineKeyboard([[webAppButton('פתח לעריכה', editorUrl)]]),
+    reply_markup: inlineKeyboard([editorRow(draftId, draft.content)]),
   });
 }
 
@@ -641,9 +715,7 @@ export async function handleFreeText(chatId, userId, draftId, text) {
 
   if (intent.action === 'publish') {
     await sendMessage(chatId, 'הפרסום נעשה ממסך העריכה, אחרי שקבעת מחיר.', {
-      reply_markup: inlineKeyboard([
-        [webAppButton('פתח לעריכה', `${config.publicBaseUrl}/product/${draftId}`)],
-      ]),
+      reply_markup: inlineKeyboard([editorRow(draftId, content)]),
     });
     return;
   }
@@ -844,10 +916,7 @@ export async function generateImage(chatId, userId, draftId, kind, correctionHin
   await card.release(userId);
 
   await sendMessage(chatId, 'התמונות מחכות לך במסך העריכה.', {
-    reply_markup: inlineKeyboard([
-      [webAppButton('פתח לעריכה', `${config.publicBaseUrl}/product/${draftId}`)],
-      ...rows,
-    ]),
+    reply_markup: inlineKeyboard([editorRow(draftId, draft.content), ...rows]),
   });
 }
 
@@ -865,10 +934,9 @@ export async function skipImageEditing(chatId, userId, draftId) {
     draft.images
   );
 
-  const editorUrl = `${config.publicBaseUrl}/product/${draftId}`;
 
   await sendMessage(chatId, 'ממשיך עם התמונות המקוריות.', {
-    reply_markup: inlineKeyboard([[webAppButton('פתח לעריכה ופרסום', editorUrl)]]),
+    reply_markup: inlineKeyboard([editorRow(draftId, draft.content, 'פתח לעריכה ופרסום')]),
   });
 }
 
