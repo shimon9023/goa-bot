@@ -476,10 +476,8 @@ export async function askNextUncertain(chatId, userId, draftId) {
   });
 
   try {
-    if (variant.photo) {
-      const url = await resolvePhotoUrl(variant.photo);
-      await sendPhoto(chatId, url);
-    }
+    // מזהה הקובץ, לא כתובת. ראה ההערה ב-startFromWarehouseRow.
+    if (variant.photo) await sendPhoto(chatId, variant.photo);
   } catch (error) {
     console.error('שליחת תמונת וריאציה נכשלה:', error.message);
   }
@@ -1037,12 +1035,14 @@ export async function startFromWarehouseRow(chatId, userId, row) {
 
   // מראים קודם מה יש, ורק אז מתחילים לעבוד.
   // התמונות עצמן, כדי שיראה מה צולם לפני שהבוט משקיע זמן וכסף.
+  // שולחים את מזהה הקובץ ולא כתובת. טלגרם מסרב למשוך תמונה
+  // מכתובת שהיא שלו עצמו, ומחזיר "failed to get HTTP URL content".
   if (photos.length) {
     try {
-      const urls = await Promise.all(photos.slice(0, 10).map(resolvePhotoUrl));
-
-      for (const [index, url] of urls.entries()) {
-        await sendPhoto(chatId, url, index === 0 ? 'מהרשימה של המחסן' : '');
+      if (photos.length > 1) {
+        await sendMediaGroup(chatId, photos.slice(0, 10), 'מהרשימה של המחסן');
+      } else {
+        await sendPhoto(chatId, photos[0], 'מהרשימה של המחסן');
       }
     } catch (error) {
       console.error('הצגת תמונות מהרשימה נכשלה:', error.message);
