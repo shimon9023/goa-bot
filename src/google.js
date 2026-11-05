@@ -399,7 +399,24 @@ export async function findRow(id) {
 
 export async function pendingRows() {
   const rows = await readRows();
-  return rows.filter((row) => (row.cells[COL.status] || STATUS.pending) === STATUS.pending);
+  const pending = rows.filter((row) => (row.cells[COL.status] || STATUS.pending) === STATUS.pending);
+
+  countCache = { at: Date.now(), value: pending.length };
+  return pending;
+}
+
+// רק המספר, בשביל הכפתור בתפריט. פנייה לשיטס לוקחת זמן,
+// ואין סיבה לשלם אותה בכל לחיצה.
+let countCache = { at: 0, value: 0 };
+
+export async function pendingCount() {
+  if (Date.now() - countCache.at < 60 * 1000) return countCache.value;
+
+  const data = await stored();
+  if (!data.refreshToken || !data.sheetId) return 0;
+
+  const rows = await pendingRows();
+  return rows.length;
 }
 
 const COLUMN_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';

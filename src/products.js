@@ -326,51 +326,27 @@ export async function showSummary(chatId, draftId) {
   const uncertain = variants.filter((variant) => !variant.certain);
 
   const asList = (value) => (Array.isArray(value) ? value : value ? [value] : []);
-  const notes = asList(content.notes);
   const questions = asList(content.questions);
 
-  const lines = [
-    `<b>${content.name || 'בלי שם'}</b>`,
-    content.shortDescription ? `<i>${content.shortDescription}</i>` : '',
-    '',
-  ];
+  // שורות ספורות בלבד. כל הפרטים מחכים במסך העריכה.
+  const lines = [`<b>${content.name || 'בלי שם'}</b>`];
 
-  if (content.categories?.length) lines.push(`קטגוריות: ${content.categories.join(', ')}`);
-  if (content.tags?.length) lines.push(`תגיות: ${content.tags.join(', ')}`);
+  const facts = [
+    content.categories?.[0] || null,
+    variants.length ? `${variants.length} וריאציות · ${content.attribute?.name || 'בלי תכונה'}` : null,
+    content.priceFromUser ? `${content.priceFromUser} ₪` : null,
+  ].filter(Boolean);
 
-  if (variants.length) {
-    lines.push('');
-    lines.push(
-      content.attribute
-        ? `${variants.length} וריאציות בתכונה "${content.attribute.name}"`
-        : `${variants.length} וריאציות, אבל לא מצאתי תכונה מתאימה באתר`
-    );
+  if (facts.length) lines.push(facts.join(' · '));
 
-    lines.push(variants.map((v) => (v.certain ? v.value : `${v.value || '?'} ❓`)).join(' · '));
-
-    if (content.attributeReason) lines.push(`<i>${content.attributeReason}</i>`);
-  }
-
-  lines.push('');
-  lines.push(
-    content.priceFromUser ? `מחיר: ${content.priceFromUser} ₪` : 'מחיר: תקבע בעריכה'
-  );
-
-  if (notes.length) {
-    lines.push('');
-    lines.push(...notes.slice(0, 3).map((note) => `• ${note}`));
-  }
+  // רק מה שחוסם מוצג כאן
+  if (uncertain.length) lines.push(`❓ ${uncertain.length} וריאציות לא ברורות`);
+  if (!content.attribute && variants.length) lines.push('⚠️ לא מצאתי תכונה מתאימה באתר');
 
   if (questions.length) {
     lines.push('');
-    lines.push('<b>שאלות שיש לי</b>');
-    lines.push(...questions.slice(0, 4).map((question) => `❓ ${question}`));
-    lines.push('');
-    lines.push('תענה בכתיבה או בהקלטה, או דלג.');
+    lines.push(...questions.slice(0, 3).map((question) => `❓ ${question}`));
   }
-
-  lines.push('');
-  lines.push('<i>להוספה או לתיקון, פשוט תכתוב או תקליט.</i>');
 
   const rows = [];
 
@@ -633,6 +609,48 @@ export async function goToEditor(chatId, userId, draftId, mode) {
 
 // --- תיקון בשפה חופשית ---
 
+// כל טקסט חופשי עובר כאן קודם. בלי זה "ייצר את התמונות שנכשלו"
+// נשלח לכתיבה מחדש של המוצר, וזה בדיוק מה שקרה.
+export async function handleFreeText(chatId, userId, draftId, text) {
+  const draft = await getDraft(draftId);
+
+  if (!draft) {
+    await sendMessage(chatId, 'הטיוטה לא נמצאה. אולי היא כבר פורסמה.');
+    return;
+  }
+
+  const content = draft.content;
+  const failed = content.failedImages || [];
+
+  let intent = { action: 'revise', onlyFailed: false };
+
+  try {
+    intent = await ai.readProductIntent(text, {
+      hasImages: Boolean(content.generatedImage),
+      failedImages: failed,
+    });
+  } catch (error) {
+    console.error('סיווג הבקשה נכשל, ממשיך כתיקון תוכן:', error.message);
+  }
+
+  if (intent.action === 'images') {
+    await card.show(chatId, userId, intent.onlyFailed ? 'מייצר את מה שנכשל.' : 'מייצר תמונות.');
+    await generateImage(chatId, userId, draftId, 'product', '', { onlyFailed: intent.onlyFailed });
+    return;
+  }
+
+  if (intent.action === 'publish') {
+    await sendMessage(chatId, 'הפרסום נעשה ממסך העריכה, אחרי שקבעת מחיר.', {
+      reply_markup: inlineKeyboard([
+        [webAppButton('פתח לעריכה', `${config.publicBaseUrl}/product/${draftId}`)],
+      ]),
+    });
+    return;
+  }
+
+  await reviseDraft(chatId, userId, draftId, text);
+}
+
 export async function reviseDraft(chatId, userId, draftId, instruction) {
   const draft = await getDraft(draftId);
 
@@ -705,7 +723,7 @@ export async function useOriginalImages(draftId) {
   );
 }
 
-export async function generateImage(chatId, userId, draftId, kind, correctionHint = '') {
+export async function generateImage(chatId, userId, draftId, kind, correctionHint = '', { onlyFailed = false } = {}) {
   const draft = await getDraft(draftId);
   if (!draft) {
     await sendMessage(chatId, 'הטיוטה לא נמצאה.');
@@ -715,17 +733,30 @@ export async function generateImage(chatId, userId, draftId, kind, correctionHin
   const settings = await db.getSettings();
   await ai.assertWithinBudget(settings);
 
-  const variants = (draft.content.variants || []).filter((v) => v.value);
-  const total = variants.length >= 2 ? variants.length : 1;
+  const allVariants = (draft.content.variants || []).filter((v) => v.value);
+  const isVariable = allVariants.length >= 2;
 
-  await sendMessage(
+  // "ייצר את מה שנכשל" נוגע רק במה שאין לו תמונה, ולא דורס את מה שהצליח
+  const variants = onlyFailed && isVariable
+    ? allVariants.filter((variant) => !variant.imageUrl)
+    : allVariants;
+
+  if (onlyFailed && isVariable && !variants.length) {
+    await sendMessage(chatId, 'לכל הוריאציות כבר יש תמונה.');
+    return;
+  }
+
+  const total = isVariable ? variants.length : 1;
+
+  await card.show(
     chatId,
+    userId,
     total > 1
       ? `מייצר ${total} תמונות, אחת לכל וריאציה. זה ייקח כמה דקות.`
       : 'מייצר תמונה.'
   );
 
-  const sources = total > 1 ? variants.map((v) => v.photo) : [draft.images[0]];
+  const sources = isVariable ? variants.map((v) => v.photo) : [draft.images[0]];
 
   const produced = [];
   const failed = [];
@@ -755,17 +786,27 @@ export async function generateImage(chatId, userId, draftId, kind, correctionHin
     return;
   }
 
-  // התמונה הראשונה היא הראשית, והשאר נכנסות לגלריה ולווריאציות
-  const updatedVariants = variants.map((v) => {
+  // התמונה הראשונה היא הראשית, והשאר נכנסות לגלריה ולווריאציות.
+  // עוברים על כל הוריאציות ולא רק על אלה שייצרנו עכשיו,
+  // כדי שהרצה חלקית לא תמחק תמונות שכבר קיימות.
+  const updatedVariants = allVariants.map((v) => {
     const match = produced.find((p) => p.label === v.value);
     return match ? { ...v, imageUrl: match.url } : v;
   });
 
+  const withImages = updatedVariants.filter((v) => v.imageUrl);
+
   const content = {
     ...draft.content,
-    generatedImage: produced[0].url,
-    extraImages: produced.slice(1).map((p) => p.url),
+    generatedImage: isVariable
+      ? withImages[0]?.imageUrl || produced[0].url
+      : produced[0].url,
+    extraImages: isVariable
+      ? withImages.slice(1).map((v) => v.imageUrl)
+      : produced.slice(1).map((p) => p.url),
     variants: updatedVariants,
+    // נשמר כדי ש"ייצר את מה שנכשל" יידע על מה לדבר
+    failedImages: failed,
     imageKind: kind,
   };
 
@@ -780,35 +821,32 @@ export async function generateImage(chatId, userId, draftId, kind, correctionHin
     });
   }
 
-  const caption = [
-    produced.length > 1 ? `${produced.length} תמונות מוכנות.` : 'איך זה נראה?',
-    failed.length ? `נכשלו: ${failed.join(', ')}` : '',
-  ].filter(Boolean).join('\n');
+  const caption = failed.length
+    ? `${produced.length} מוכנות, ${failed.length} נכשלו: ${failed.join(', ')}`
+    : `${produced.length} ${produced.length === 1 ? 'תמונה מוכנה' : 'תמונות מוכנות'}`;
 
-  // כמה תמונות נשלחות כגלריה אחת, לא הודעה לכל אחת
-  if (produced.length > 1) {
-    try {
-      await sendMediaGroup(chatId, produced.map((item) => item.url), caption);
-    } catch (error) {
-      console.error('שליחת הגלריה נכשלה, שולח אחת:', error.message);
-      await sendPhoto(chatId, produced[0].url, caption);
-    }
+  const rows = [];
+  if (failed.length) rows.push([button(`נסה שוב את ${failed.length} שנכשלו`, `prod:redo:${draftId}`)]);
+  rows.push([button('ייצר שוב הכל', `prod:regen:${kind}:${draftId}`), button('תקן לפי הערה', `prod:imgfix:${kind}:${draftId}`)]);
 
-    await sendMessage(chatId, 'מה עכשיו?', {
-      reply_markup: inlineKeyboard([
-        [button('אהבתי', `prod:imgok:${draftId}`)],
-        [button('ייצר שוב', `prod:regen:${kind}:${draftId}`)],
-        [button('תקן לפי הערה', `prod:imgfix:${kind}:${draftId}`)],
-      ]),
-    });
-    return;
+  const images = produced.map((item) => item.url);
+
+  // גלריה אחת עם הכפתורים בהודעה אחת מתחתיה.
+  // טלגרם לא מאפשר כפתורים על אלבום, אז זו הדרך היחידה לצמצם.
+  try {
+    if (images.length > 1) await sendMediaGroup(chatId, images, caption);
+    else await sendPhoto(chatId, images[0], caption);
+  } catch (error) {
+    console.error('שליחת התמונות נכשלה:', error.message);
+    await sendPhoto(chatId, images[0], caption).catch(() => {});
   }
 
-  await sendPhoto(chatId, produced[0].url, caption, {
+  await card.release(userId);
+
+  await sendMessage(chatId, 'התמונות מחכות לך במסך העריכה.', {
     reply_markup: inlineKeyboard([
-      [button('אהבתי', `prod:imgok:${draftId}`)],
-      [button('ייצר שוב', `prod:regen:${kind}:${draftId}`)],
-      [button('תקן לפי הערה', `prod:imgfix:${kind}:${draftId}`)],
+      [webAppButton('פתח לעריכה', `${config.publicBaseUrl}/product/${draftId}`)],
+      ...rows,
     ]),
   });
 }

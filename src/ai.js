@@ -639,12 +639,39 @@ export const IMAGE_PROMPTS = {
 בלי להוסיף אביזרים, משטחים או רקעים דקורטיביים.`,
 };
 
-export async function generateProductImage(imageUrl, { correctionHint = '' } = {}) {
+// ג'מיני נוטה לפעמים לענות כמו צ'אט: "בטח, הנה תמונת המוצר שלך",
+// בלי להחזיר תמונה. זו לא חסימה ולא שגיאה, פשוט התנהגות לא יציבה.
+// לכן מנסים שוב, ומחדדים לו שאסור לכתוב מילים.
+export async function generateProductImage(imageUrl, { correctionHint = '', attempts = 3 } = {}) {
+  let last = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await generateOnce(imageUrl, { correctionHint, attempt });
+    } catch (error) {
+      last = error;
+
+      // סירוב או חסימה לא ישתנו בניסיון נוסף
+      if (/blockReason|חסימה|SAFETY|PROHIBITED/i.test(error.message)) throw error;
+
+      console.error(`יצירת תמונה, ניסיון ${attempt} מתוך ${attempts}: ${error.message}`);
+    }
+  }
+
+  throw last;
+}
+
+async function generateOnce(imageUrl, { correctionHint = '', attempt = 1 } = {}) {
   // הכל מוצרי עישון. אין יותר הפרדה בין סוגי מוצר.
   const basePrompt = IMAGE_PROMPTS.product;
 
+  const insist =
+    attempt > 1
+      ? '\n\nהחזר קובץ תמונה בלבד. אל תכתוב מילים, אל תתאר מה עשית ואל תענה בטקסט.'
+      : '';
+
   // ההערה של שמעון נדבקת בסוף, כמו correctionHint ב-AI Studio
-  const prompt = correctionHint ? `${basePrompt}\n\n${correctionHint}` : basePrompt;
+  const prompt = `${basePrompt}${correctionHint ? `\n\n${correctionHint}` : ''}${insist}`;
 
   const { buffer, mimeType } = await fetchWithMime(imageUrl, 'image/jpeg');
 
@@ -729,6 +756,46 @@ minPrice: המחיר בשקלים שמופיע על המדבקה של המוצר
     quantity: String(result.quantity ?? '').trim(),
     minPrice: String(result.minPrice ?? '').trim(),
   };
+}
+
+// --- מה שמעון ביקש בטקסט החופשי ---
+// בלי זה כל מה שהוא כותב מתפרש כתיקון תוכן, וגם "ייצר את התמונות
+// שנכשלו" נשלח לכתיבה מחדש של המוצר במקום ליצירת תמונות.
+
+export async function readProductIntent(text, { hasImages = false, failedImages = [] } = {}) {
+  const result = await callClaudeJson({
+    label: 'כוונה במוצר',
+    maxTokens: 400,
+    system: `אתה מסווג בקשה חופשית בעברית שנאמרה באמצע בניית מוצר לחנות.
+
+הפעולות האפשריות:
+- images: ליצור או לייצר מחדש תמונות מוצר
+- price: לקבוע מחיר
+- stock: לקבוע מלאי או כמות
+- publish: לפרסם או לשמור כטיוטה
+- revise: כל שינוי בטקסט, בשם, בתיאור, בקטגוריה, בתגיות או בוריאציות
+- answer: תשובה לשאלה שהבוט שאל, שמוסיפה מידע על המוצר
+
+בספק בין revise ל-answer, בחר revise. שניהם מעדכנים את התוכן.
+onlyFailed הוא true רק כשנאמר במפורש לייצר את מה שנכשל, או את מה שחסר.`,
+    messages: [
+      {
+        role: 'user',
+        content: `הבקשה: ${text}
+
+${failedImages.length ? `תמונות שנכשלו קודם: ${failedImages.join(', ')}` : 'לא נכשלו תמונות'}
+${hasImages ? 'כבר קיימות תמונות ערוכות.' : 'עוד אין תמונות ערוכות.'}
+
+החזר JSON:
+{ "action": "revise", "onlyFailed": false, "summary": "משפט קצר מה הוא ביקש" }`,
+      },
+    ],
+  });
+
+  const allowed = ['images', 'price', 'stock', 'publish', 'revise', 'answer'];
+  const action = allowed.includes(result?.action) ? result.action : 'revise';
+
+  return { action, onlyFailed: Boolean(result?.onlyFailed), summary: result?.summary || '' };
 }
 
 // --- קריאת תוצאות חיפוש אצל מתחרה ---

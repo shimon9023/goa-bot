@@ -163,8 +163,8 @@ async function handleMessage(message, areas) {
 
       // כשהוא באמצע תיקון, ההקלטה היא ההוראה ולא איסוף מידע חדש
       if (state.awaiting === 'revise') {
-        await sendMessage(chatId, `שמעתי:\n<i>${transcript}</i>`);
-        await products.reviseDraft(chatId, userId, state.draftId, transcript);
+        await card.show(chatId, userId, `שמעתי:\n<i>${transcript}</i>`);
+        await products.handleFreeText(chatId, userId, state.draftId, transcript);
         return;
       }
 
@@ -220,29 +220,23 @@ async function handleMessage(message, areas) {
     }],
 
     'מוצר חדש': ['products', async () => {
-      await db.clearState(userId);
-
       // שניים צרים למעלה, והרשימה ככפתור רחב מתחתיהם
       const rows = [[button('מוצר חדש', 'prod:new'), button('וריאציה למוצר קיים', 'prod:variation')]];
 
-      // האפשרות הזו מופיעה רק כשיש באמת מה לקחת מהרשימה
-      try {
-        if (await google.isConnected()) {
-          const pending = await google.pendingRows();
-          if (pending.length) {
-            rows.push([button(`מוצרים מהרשימה (${pending.length})`, 'prod:list')]);
-          }
-        }
-      } catch (error) {
-        console.error('קריאת רשימת ההעלאה נכשלה:', error.message);
-      }
+      // שתי הבדיקות רצות במקביל. סידרתית הן הוסיפו המתנה מורגשת
+      // לכפתור שלא אמור לחשוב בכלל.
+      const [pending, open] = await Promise.all([
+        google.pendingCount().catch((error) => {
+          console.error('קריאת רשימת ההעלאה נכשלה:', error.message);
+          return 0;
+        }),
+        products.openDraftFor(userId).catch(() => null),
+      ]);
 
-      // טיוטה שננטשה באמצע מחכה להמשך
-      const open = await products.openDraftFor(userId);
-      if (open) {
-        rows.push([button(`המשך: ${open.name}`, `prod:resume:${open.id}`)]);
-      }
+      if (pending) rows.push([button(`מוצרים מהרשימה (${pending})`, 'prod:list')]);
+      if (open) rows.push([button(`המשך: ${open.name}`, `prod:resume:${open.id}`)]);
 
+      await db.clearState(userId);
       await sendMessage(chatId, 'מה נוסיף?', { reply_markup: inlineKeyboard(rows) });
     }],
 
@@ -298,9 +292,10 @@ async function handleTextInput(chatId, userId, text, areas = []) {
     return;
   }
 
-  // תיקון תוכן של טיוטה
+  // טקסט חופשי באמצע בניית מוצר. הבוט מבין מה ביקשת
+  // לפני שהוא מחליט אם זה תיקון תוכן או פקודת תמונות.
   if (state?.module === 'product' && state.awaiting === 'revise') {
-    await products.reviseDraft(chatId, userId, state.draftId, text);
+    await products.handleFreeText(chatId, userId, state.draftId, text);
     return;
   }
 
@@ -732,6 +727,11 @@ async function handleProductCallback(chatId, userId, action, rest) {
 
     case 'regen':
       await products.generateImage(chatId, userId, rest[1], rest[0]);
+      break;
+
+    // ניסיון חוזר רק למה שנכשל, בלי לגעת במה שהצליח
+    case 'redo':
+      await products.generateImage(chatId, userId, rest[0], 'product', '', { onlyFailed: true });
       break;
 
     case 'imgfix': {

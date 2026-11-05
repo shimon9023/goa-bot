@@ -35,27 +35,48 @@ async function tryRun(label, query) {
 // --- מצב שיחה ---
 // שומר על מה המשתמש באמצע, כדי שההודעה הבאה שלו תתפרש נכון.
 
+// מצב השיחה נקרא ונכתב הרבה פעמים בכל פעולה, וכל פנייה לסופהבייס
+// היא הלוך-חזור שמורגש בזמן התגובה של הכפתורים.
+// השרת רץ במופע יחיד, אז מטמון בזיכרון בטוח כאן.
+const stateCache = new Map();
+
 export async function getState(userId) {
+  const key = String(userId);
+
+  if (stateCache.has(key)) return stateCache.get(key);
+
   const data = await tryRun(
     'קריאת מצב',
-    supabase.from('bot_sessions').select('state').eq('user_id', String(userId)).maybeSingle()
+    supabase.from('bot_sessions').select('state').eq('user_id', key).maybeSingle()
   );
 
-  return data?.state || null;
+  const state = data?.state || null;
+  stateCache.set(key, state);
+
+  return state;
 }
 
 export async function setState(userId, state) {
+  const key = String(userId);
+
+  // המטמון מתעדכן מיד, והכתיבה לסופהבייס רצה ברקע.
+  // אם היא נכשלת זה נרשם בלוג, והמצב בזיכרון עדיין נכון להמשך השיחה.
+  stateCache.set(key, state);
+
   await run(
     'שמירת מצב',
     supabase.from('bot_sessions').upsert(
-      { user_id: String(userId), state, updated_at: new Date().toISOString() },
+      { user_id: key, state, updated_at: new Date().toISOString() },
       { onConflict: 'user_id' }
     )
   );
 }
 
 export async function clearState(userId) {
-  await tryRun('ניקוי מצב', supabase.from('bot_sessions').delete().eq('user_id', String(userId)));
+  const key = String(userId);
+  stateCache.set(key, null);
+
+  await tryRun('ניקוי מצב', supabase.from('bot_sessions').delete().eq('user_id', key));
 }
 
 // --- הגדרות ---
